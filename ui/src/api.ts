@@ -1,0 +1,238 @@
+const API_BASE =
+  // Prefer env override; fallback to local dev server.
+  (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
+
+export type TranscriptListItem = {
+  id: string;
+  title: string;
+  line_count: number;
+  duration: number | null;
+};
+
+export type TranscriptLine = {
+  index: number;
+  start: number;
+  end: number;
+  speaker: string;
+  text: string;
+};
+
+export type TranscriptFull = {
+  id: string;
+  title: string;
+  total_lines: number;
+  duration: number | null;
+  lines: TranscriptLine[];
+};
+
+export type TranscriptPage = {
+  id: string;
+  title: string;
+  page: number;
+  total_pages: number;
+  page_size: number;
+  total_lines: number;
+  duration: number | null;
+  lines: TranscriptLine[];
+};
+
+export type ActionableTopic = {
+  title: string;
+  action?: string;
+  owner?: string | null;
+  due?: string | null;
+  impact?: string;
+  evidence?: string;
+};
+
+export type SummaryResponse = {
+  transcript_id?: string | null;
+  summary_file?: string | null;
+  headline?: string | null;
+  summary: string;
+  bullet_points?: string[];
+  bullets?: string[];
+};
+
+export type AnalysisResponse = {
+  transcript_id?: string | null;
+  highlights: string[];
+  actionable_topics: ActionableTopic[];
+};
+
+export type AssistantSource = {
+  reportId?: string;
+  title?: string;
+};
+
+export type AssistantChart = {
+  type?: string;
+  data?: { name: string; value: number }[];
+};
+
+export type AssistantResponse = {
+  type: "text" | "chart";
+  answer?: string;
+  chart?: AssistantChart;
+  sources?: AssistantSource[];
+};
+
+export async function sendOpenAI(file: File, roomId?: string, diarize = false) {
+  const form = new FormData();
+  form.append("file", file);
+  if (roomId) form.append("room_id", roomId);
+  if (diarize) form.append("diarize", String(diarize));
+
+  const res = await fetch(`${API_BASE}/openai_transcribe`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<{ room_id: string; transcript: string; diarize: boolean; segments?: unknown; raw?: unknown }>;
+}
+
+export async function sendWhisperX(file: File, device = "cuda", roomId?: string) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("device", device);
+  if (roomId) form.append("room_id", roomId);
+
+  const res = await fetch(`${API_BASE}/whisperx_traanscribe`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<{ room_id: string; transcript: string; device: string }>;
+}
+
+export async function summarizeTranscript(body: {
+  transcript_text?: string;
+  transcript_id?: string;
+  save_summary?: boolean;
+}) {
+  const res = await fetch(`${API_BASE}/transcriptions/summarize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      transcript_id: body.transcript_id,
+      transcript_text: body.transcript_text,
+      save_summary: body.save_summary ?? false,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<SummaryResponse>;
+}
+
+export async function fetchSummary(transcriptId: string): Promise<SummaryResponse | null> {
+  const res = await fetch(
+    `${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}/summary`,
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<SummaryResponse>;
+}
+
+export async function analyzeTranscript(body: { transcript_text?: string; transcript_id?: string }) {
+  const res = await fetch(`${API_BASE}/transcriptions/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<AnalysisResponse>;
+}
+
+export function openProgressSocket(roomId: string, onMessage: (data: unknown) => void) {
+  const ws = new WebSocket(`${API_BASE.replace("http", "ws")}/ws/${roomId}`);
+  ws.onmessage = (event) => {
+    try {
+      onMessage(JSON.parse(event.data));
+    } catch {
+      onMessage(event.data);
+    }
+  };
+  return ws;
+}
+
+export async function listTranscriptions(): Promise<TranscriptListItem[]> {
+  const res = await fetch(`${API_BASE}/transcriptions`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  const data = (await res.json()) as { items: TranscriptListItem[] };
+  return data.items ?? [];
+}
+
+export async function fetchTranscript(transcriptId: string): Promise<TranscriptFull> {
+  const res = await fetch(`${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}?stream=false`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<TranscriptFull>;
+}
+
+export async function streamTranscriptPages(
+  transcriptId: string,
+  pageSize: number,
+  opts: { signal?: AbortSignal; onPage: (page: TranscriptPage) => void },
+): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}?stream=true&page_size=${pageSize}`,
+    { signal: opts.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error("Streaming not supported in this browser.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split(/\n/);
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      opts.onPage(JSON.parse(trimmed) as TranscriptPage);
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    opts.onPage(JSON.parse(tail) as TranscriptPage);
+  }
+}
+
+export async function askAssistant(question: string): Promise<AssistantResponse> {
+  const form = new FormData();
+  form.append("question", question);
+
+  const res = await fetch(`${API_BASE}/assistant`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return res.json() as Promise<AssistantResponse>;
+}

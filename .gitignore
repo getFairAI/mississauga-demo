@@ -1,0 +1,7 @@
+chunks/
+data/
+.venv13/
+__pycache__
+transcriptions/
+.env
+*.mp4
