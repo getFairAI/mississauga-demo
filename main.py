@@ -4,6 +4,7 @@ Run with:
     uvicorn main:app --reload --port 8000
 """
 
+import os
 import asyncio
 import json
 import uuid
@@ -930,4 +931,6 @@ async def assistant(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+    PORT = os.getenv("OPENAI_API_KEY", 8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
