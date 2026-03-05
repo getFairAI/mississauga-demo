@@ -1031,7 +1031,7 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                   </Typography>
                 )}
 
-                {summary && summaryProgress.status === "finished" && (
+                {summary && (
                   <Stack spacing={1.5}>
                     {summary.headline && (
                       <Typography variant="h6" fontWeight={700}>
