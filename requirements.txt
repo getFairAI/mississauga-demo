@@ -8,3 +8,4 @@ readability-lxml
 whisperx
 python-dotenv
 python-multipart
+ollama
