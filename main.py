@@ -221,7 +221,18 @@ def parse_transcript_file(path: Path) -> List[TranscriptLine]:
                 text=text,
             )
         )
-    return parsed
+        
+    
+    if path.stem.startswith("budget_"):
+        topic = "Budget Comittee"
+    elif path.stem.startswith("combat_"):
+        topic = "Combating Racis, Discrimination and Hatred Advisory Com"
+    elif path.stem.startswith("road_safety"):
+        topic = "Road Safety Comittee"
+    else:
+        topic = "General"
+        
+    return parsed, topic
 
 
 def _chunk_lines(lines: List[TranscriptLine], page_size: int) -> List[List[TranscriptLine]]:
@@ -546,12 +557,13 @@ async def list_transcriptions() -> dict:
             # Skip generated summary files (e.g., foo_summary.txt) to avoid double-counting.
             if path.stem.endswith("_summary") or path.stem.find("_part") != -1:
                 continue
-            lines = parse_transcript_file(path)
+            lines, topic = parse_transcript_file(path)
             duration = lines[-1].end if lines else None
             items.append(
                 {
                     "id": path.name,
                     "title": path.stem,
+                    "topic": topic,
                     "line_count": len(lines),
                     "duration": duration,
                 }
@@ -573,7 +585,7 @@ async def get_transcription(
     - `page_size`: number of rows per streamed page.
     """
     path = _resolve_transcript_path(transcript_id)
-    lines = parse_transcript_file(path)
+    lines, _ = parse_transcript_file(path)
     duration = lines[-1].end if lines else None
     title = path.stem
 
@@ -617,7 +629,7 @@ async def analyze_transcription(payload: AnalyzeTranscriptRequest) -> dict:
 
     if payload.transcript_id:
         path = _resolve_transcript_path(payload.transcript_id)
-        lines = parse_transcript_file(path)
+        lines, _ = parse_transcript_file(path)
         transcript_text = "\n".join(f"[{line.start:.2f}-{line.end:.2f}] {line.speaker}: {line.text}" for line in lines)
         chosen_id = path.name
     else:
@@ -876,7 +888,7 @@ async def assistant(
         user_msg = f"REPORTS:\n{blocks_txt}\n\nQUESTION:\n{question}"
 
         completion = openai.chat.completions.create(
-            model="gpt-4.1",
+            model="gpt-5.2",
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
@@ -937,5 +949,5 @@ if __name__ == "__main__":
     import uvicorn
 
 
-    PORT = os.getenv("OPENAI_API_KEY", 8000)
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
+    PORT = os.getenv("PORT", 8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(PORT), reload=True)

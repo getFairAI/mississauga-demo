@@ -1,7 +1,7 @@
 # whisperx_transcriber.py
 import os
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, List
 import inspect
 
 import whisperx
@@ -104,3 +104,51 @@ def transcribe_with_whisperx(
     output = "\n".join(lines)
     send("done", {"percent": 100})
     return output
+
+async def transcribe_large_file_chunked(
+    chunks_path: Path,
+) -> str:
+    """
+    Split a large audio/video into chunks and transcribe each chunk with OpenAI,
+    then concatenate transcripts in order.
+    """
+    
+    if not chunks_path.exists():
+        raise FileNotFoundError(f"Audio parts not found: {chunks_path}")
+
+    transcripts_dir = Path("./transcriptions")
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    final_path = transcripts_dir / f"{chunks_path.name}.txt"
+
+    # If we already have the full transcript, skip work and return it.
+    if final_path.exists():
+        return final_path.read_text(encoding="utf-8")
+
+    # temp_dir = Path(tempfile.mkdtemp(prefix="chunks_"))
+    try:
+        chunks = sorted(chunks_path.glob("part_*.mp3"))
+        if not chunks:
+            raise RuntimeError("No chunks were produced by ffmpeg.")
+
+        combined: List[str] = []
+        for idx, chunk in enumerate(chunks, start=1):
+            print(f"Transcribing chunk {idx}/{len(chunks)}: {chunks_path}-{chunk.name}")
+            chunk_output = transcripts_dir / f"{chunks_path.name}_{chunk.stem}.txt"
+
+            # Skip transcription if this chunk was already processed.
+            if chunk_output.exists():
+                text = chunk_output.read_text(encoding="utf-8")
+            else:
+                text = await transcribe_with_whisperx(chunk)
+                chunk_output.write_text(text, encoding="utf-8")
+
+            combined.append(text)
+
+        result = "\n".join(combined)
+        # Persist the full concatenated transcript for future fast paths.
+        final_path.write_text(result, encoding="utf-8")
+        return result
+    finally:
+        print("done")
+        # if not keep_chunks:
+            # shutil.rmtree(temp_dir, ignore_errors=True)

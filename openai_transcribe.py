@@ -164,7 +164,7 @@ async def transcribe_large_file_chunked(
 
         combined: List[str] = []
         for idx, chunk in enumerate(chunks, start=1):
-            print(f"Transcribing chunk {idx}/{len(chunks)}: {chunk.name}")
+            print(f"Transcribing chunk {idx}/{len(chunks)}: {chunks_path}-{chunk.name}")
             chunk_output = transcripts_dir / f"{chunks_path.name}_{chunk.stem}.txt"
 
             # Skip transcription if this chunk was already processed.
