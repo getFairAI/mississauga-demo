@@ -5,7 +5,7 @@ import { motion } from "motion/react";
 import { useSnackbar } from "notistack";
 import { useState, type ChangeEvent, type DragEventHandler } from "react";
 import ClearIcon from "@mui/icons-material/Clear";
-import { printSize } from "../utils";
+import { printSize } from "../utils/printSize";
 import { openProgressSocket, sendOpenAI } from "../api";
 
 const MAX_UPLOAD_SIZE = 2048 * 1024 * 1000; // 2GB in bytes

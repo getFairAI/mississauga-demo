@@ -6,30 +6,20 @@ import {
   Chip,
   CircularProgress,
   Divider,
-  IconButton,
-  InputAdornment,
   LinearProgress,
   Paper,
   Stack,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  Tooltip,
   Typography,
   Switch,
   FormControlLabel,
+  Pagination,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import SearchIcon from "@mui/icons-material/Search";
-import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
-import AccessTimeRoundedIcon from "@mui/icons-material/AccessTimeRounded";
 import NotesRoundedIcon from "@mui/icons-material/NotesRounded";
-import StarsRoundedIcon from "@mui/icons-material/StarsRounded";
 import SummarizeRoundedIcon from "@mui/icons-material/SummarizeRounded";
-import CloudSyncRoundedIcon from "@mui/icons-material/CloudSyncRounded";
-import FileDownloadRoundedIcon from "@mui/icons-material/FileDownloadRounded";
-import NavigateBeforeRoundedIcon from "@mui/icons-material/NavigateBeforeRounded";
-import NavigateNextRoundedIcon from "@mui/icons-material/NavigateNextRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import BoltRoundedIcon from "@mui/icons-material/BoltRounded";
 import TaskAltRoundedIcon from "@mui/icons-material/TaskAltRounded";
@@ -37,8 +27,10 @@ import Tab from "@mui/material/Tab";
 import TabContext from "@mui/lab/TabContext";
 import TabList from "@mui/lab/TabList";
 import TabPanel from "@mui/lab/TabPanel";
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import StarIcon from '@mui/icons-material/Star';
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import StarIcon from "@mui/icons-material/Star";
+import { formatTranscriptTitle } from "../utils/formatTranscriptTitle";
+import { formatDuration } from "../utils/formatDuration";
 
 import type {
   AnalysisResponse,
@@ -57,15 +49,9 @@ import {
   streamTranscriptPages,
   summarizeTranscript,
 } from "../api";
+import TranscriptsList from "./TranscriptsList";
 
 type Mode = "stream" | "full";
-
-const formatDuration = (seconds: number | null | undefined) => {
-  if (seconds === null || seconds === undefined) return "—";
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-};
 
 const lineLabel = (line: TranscriptLine) =>
   `[${line.start.toFixed(2)} – ${line.end.toFixed(2)}] ${line.speaker}: ${line.text}`;
@@ -164,88 +150,7 @@ const renderMarkdownBlocks = (md: string): ReactNode[] => {
   return blocks;
 };
 
-const VideoListItem = ({
-  selected,
-  title,
-  duration,
-  updated,
-  tags,
-  onSelect,
-}: {
-  selected: boolean;
-  title: string;
-  duration: string;
-  updated: string;
-  tags: string[];
-  onSelect: () => void;
-}) => (
-  <Paper
-    onClick={onSelect}
-    elevation={0}
-    sx={(theme) => ({
-      p: 2,
-      borderRadius: 2,
-      border: `1px solid ${selected ? theme.palette.primary.main : theme.palette.divider}`,
-      bgcolor: selected
-        ? "rgba(15, 118, 110, 0.06)"
-        : theme.palette.background.paper,
-      cursor: "pointer",
-      transition: "all 180ms ease",
-      "&:hover": {
-        borderColor: theme.palette.primary.main,
-        transform: "translateY(-2px)",
-      },
-    })}
-  >
-    <Stack spacing={1}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Box
-          sx={{
-            width: 38,
-            height: 38,
-            borderRadius: 1.25,
-            bgcolor: "primary.main",
-            color: "common.white",
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          <PlayArrowRoundedIcon />
-        </Box>
-        <Stack spacing={0.5} flex={1}>
-          <Typography variant="subtitle1" fontWeight={700}>
-            {title}
-          </Typography>
-          <Stack
-            direction="row"
-            spacing={1.5}
-            alignItems="center"
-            color="text.secondary"
-          >
-            <Stack direction="row" spacing={0.5} alignItems="center">
-              <AccessTimeRoundedIcon fontSize="small" />
-              <Typography variant="caption">{duration}</Typography>
-            </Stack>
-            <Divider orientation="vertical" flexItem />
-            <Typography variant="caption">{updated}</Typography>
-          </Stack>
-        </Stack>
-      </Stack>
-      <Stack direction="row" spacing={1} flexWrap="wrap">
-        {tags.map((tag) => (
-          <Chip
-            key={tag}
-            label={tag}
-            size="small"
-            sx={{ borderRadius: "10px" }}
-          />
-        ))}
-      </Stack>
-    </Stack>
-  </Paper>
-);
-
-const KnowledgeWorkspace = () => {
+const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: string | null }) => {
   const [mode, setMode] = useState<Mode>("stream");
   const [pageSize, setPageSize] = useState<number>(50);
   const [transcripts, setTranscripts] = useState<TranscriptListItem[]>([]);
@@ -282,7 +187,10 @@ const KnowledgeWorkspace = () => {
         const items = await listTranscriptions();
         if (cancelled) return;
         setTranscripts(items);
-        if (!selectedId && items.length) {
+        const preferred = initialTranscriptId && items.find((t) => t.id === initialTranscriptId)?.id;
+        if (preferred) {
+          setSelectedId(preferred);
+        } else if (!selectedId && items.length) {
           setSelectedId(items[0].id);
         }
       } catch (err) {
@@ -296,6 +204,14 @@ const KnowledgeWorkspace = () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!initialTranscriptId || !transcripts.length) return;
+    const exists = transcripts.find((t) => t.id === initialTranscriptId);
+    if (exists) {
+      setSelectedId(initialTranscriptId);
+    }
+  }, [initialTranscriptId, transcripts]);
 
   // Load content (full or stream) when selection or mode changes
   useEffect(() => {
@@ -438,15 +354,6 @@ const KnowledgeWorkspace = () => {
     return map;
   }, [transcriptLines]);
 
-  const tags = useMemo(() => {
-    const bag = new Set<string>();
-    transcripts.forEach((t) => {
-      if (t.duration) bag.add("Recorded");
-      if (t.line_count > 0) bag.add("Transcript");
-    });
-    return Array.from(bag);
-  }, [transcripts]);
-
   const runAnalysis = async () => {
     if (!transcriptText.trim()) {
       setAnalysisError("Load a transcript first.");
@@ -499,79 +406,12 @@ const KnowledgeWorkspace = () => {
       zIndex={1}
     >
       {/* Library column */}
-      <Stack
-        spacing={2}
-        sx={{
-          width: { xs: "100%", lg: "30%" },
-          maxHeight: "100%",
-          minHeight: 0,
-          height: "100%",
-        }}
-      >
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-        >
-          <Stack spacing={0.5}>
-            <Typography
-              variant="overline"
-              color="primary.main"
-              fontWeight={700}
-            >
-              Knowledge Base
-            </Typography>
-            <Typography
-              variant="h5"
-              fontFamily="'Space Grotesk', 'Manrope', sans-serif"
-              fontWeight={700}
-            >
-              Transcripts
-            </Typography>
-          </Stack>
-          <Chip
-            color="primary"
-            icon={<StarsRoundedIcon />}
-            label="Live"
-            sx={{ borderRadius: "12px" }}
-          />
-        </Stack>
-
-        <TextField
-          placeholder="Search titles…"
-          size="small"
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon />
-              </InputAdornment>
-            ),
-          }}
-        />
-
-        <Stack
-          spacing={1.5}
-          sx={{ flex: 1, minHeight: 0, overflow: "auto", pr: 0.5 }}
-        >
-          {loadingList && <LinearProgress />}
-          {!loadingList && transcripts.length === 0 && (
-            <Typography variant="body2" color="text.secondary">
-              No transcript files found in /transcriptions.
-            </Typography>
-          )}
-          {transcripts.map((item) => (
-            <VideoListItem
-              key={item.id}
-              selected={item.id === selectedId}
-              title={item.title}
-              duration={formatDuration(item.duration)}
-              updated={`${item.line_count} lines`}
-              tags={tags}
-              onSelect={() => setSelectedId(item.id)}
-            />
-          ))}
-        </Stack>
-      </Stack>
+      <TranscriptsList
+        transcripts={transcripts}
+        loadingList={loadingList}
+        selectedId={selectedId}
+        setSelectedId={setSelectedId}
+      />
 
       {/* Detail column */}
       <Stack
@@ -606,7 +446,7 @@ const KnowledgeWorkspace = () => {
                 fontFamily="'Space Grotesk', 'Manrope', sans-serif"
                 fontWeight={700}
               >
-                {selectedMeta?.title ?? "—"}
+                {selectedMeta ? formatTranscriptTitle(selectedMeta.title) : "—"}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {selectedMeta
@@ -754,15 +594,10 @@ const KnowledgeWorkspace = () => {
                     onChange={(_, val: Mode) => val && setMode(val)}
                   >
                     <ToggleButton value="stream" aria-label="Stream">
-                      <CloudSyncRoundedIcon fontSize="small" sx={{ mr: 0.5 }} />{" "}
-                      Stream pages
+                      Paginated View
                     </ToggleButton>
                     <ToggleButton value="full" aria-label="Full">
-                      <FileDownloadRoundedIcon
-                        fontSize="small"
-                        sx={{ mr: 0.5 }}
-                      />{" "}
-                      Full JSON
+                      Full View
                     </ToggleButton>
                   </ToggleButtonGroup>
                 </Stack>
@@ -787,53 +622,17 @@ const KnowledgeWorkspace = () => {
                     direction="row"
                     spacing={1}
                     alignItems="center"
+                    justifyContent={"center"}
                     mb={1}
                     flexWrap="wrap"
                   >
-                    <IconButton
-                      size="small"
-                      disabled={!activePage || activePage.page <= 1}
-                      onClick={() =>
-                        setCurrentPage((p) => (p && p > 1 ? p - 1 : p))
-                      }
-                    >
-                      <NavigateBeforeRoundedIcon />
-                    </IconButton>
-                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                      {pages.map((p) => (
-                        <Chip
-                          key={p.page}
-                          label={`Page ${p.page}/${p.total_pages}`}
-                          color={
-                            p.page === activePage?.page ? "primary" : "default"
-                          }
-                          onClick={() => setCurrentPage(p.page)}
-                          size="small"
-                        />
-                      ))}
-                    </Stack>
-                    <IconButton
-                      size="small"
-                      disabled={
-                        !activePage ||
-                        activePage.page >= (activePage?.total_pages ?? 0)
-                      }
-                      onClick={() =>
-                        setCurrentPage((p) =>
-                          p && activePage
-                            ? Math.min(
-                                activePage.total_pages,
-                                (p as number) + 1,
-                              )
-                            : p,
-                        )
-                      }
-                    >
-                      <NavigateNextRoundedIcon />
-                    </IconButton>
-                    <Tooltip title="Streaming in chunks from the backend">
-                      <CloudSyncRoundedIcon color="action" />
-                    </Tooltip>
+                    <Pagination
+                      count={pages.length}
+                      color="primary"
+                      page={activePage?.page}
+                      onChange={(_, value) => setCurrentPage(value)}
+                      variant="outlined"
+                    />
                   </Stack>
                 )}
 

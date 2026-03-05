@@ -7,6 +7,7 @@ export type TranscriptListItem = {
   title: string;
   line_count: number;
   duration: number | null;
+  topic: string;
 };
 
 export type TranscriptLine = {

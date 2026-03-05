@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   Alert,
   Avatar,
@@ -15,7 +15,7 @@ import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineR
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
 import BarChartRoundedIcon from "@mui/icons-material/BarChartRounded";
 import InsightsRoundedIcon from "@mui/icons-material/InsightsRounded";
-
+import { renderMarkdown } from "../utils/renderMarkdown";
 import {
   askAssistant,
   type AssistantChart,
@@ -36,6 +36,8 @@ type ChatEntry = {
   chart?: AssistantChart;
   sources?: AssistantSource[];
 };
+
+export type { ChatEntry };
 
 const ChatMessage = ({ role, text, chart, sources }: ChatEntry) => {
   const isUser = role === "user";
@@ -74,9 +76,9 @@ const ChatMessage = ({ role, text, chart, sources }: ChatEntry) => {
           boxShadow: isUser ? "0 10px 30px rgba(15, 118, 110, 0.25)" : "none",
         })}
       >
-        <Typography variant="body2" sx={{ lineHeight: 1.5 }}>
-          {text}
-        </Typography>
+        <Stack spacing={0.75} sx={{ lineHeight: 1.6 }}>
+          {renderMarkdown(text)}
+        </Stack>
 
         {!isUser && chart?.data?.length ? (
           <Box
@@ -134,15 +136,27 @@ const ChatMessage = ({ role, text, chart, sources }: ChatEntry) => {
 
         {!isUser && sources?.length ? (
           <Stack direction="row" spacing={0.75} flexWrap="wrap" mt={1}>
-            {sources.map((source, idx) => (
-              <Chip
-                key={`${source.reportId ?? source.title ?? idx}`}
-                size="small"
-                icon={<InsightsRoundedIcon fontSize="small" />}
-                label={source.title ?? source.reportId ?? "Source"}
-                variant="outlined"
-              />
-            ))}
+            {sources.map((source, idx) => {
+              const transcriptId = source.reportId;
+              const href = transcriptId
+                ? `#/workspace?transcript=${encodeURIComponent(transcriptId)}`
+                : "#/workspace";
+              return (
+                <Chip
+                  key={`${source.reportId ?? source.title ?? idx}`}
+                  size="small"
+                  icon={<InsightsRoundedIcon fontSize="small" />}
+                  label={source.title ?? source.reportId ?? "Source"}
+                  variant="outlined"
+                  clickable
+                  component="a"
+                  href={href}
+                  sx={{
+                    padding: '4px'
+                  }}
+                />
+              );
+            })}
           </Stack>
         ) : null}
       </Paper>
@@ -155,14 +169,12 @@ const ChatMessage = ({ role, text, chart, sources }: ChatEntry) => {
   );
 };
 
-const Chat = () => {
-  const [messages, setMessages] = useState<ChatEntry[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "I can surface answers from the transcripts, highlights, and summaries in this workspace.",
-    },
-  ]);
+type ChatProps = {
+  messages: ChatEntry[];
+  setMessages: Dispatch<SetStateAction<ChatEntry[]>>;
+};
+
+const Chat = ({ messages, setMessages }: ChatProps) => {
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -216,21 +228,9 @@ const Chat = () => {
         flexDirection: "column",
         height: "100%",
         gap: 2,
+        paddingBottom: '48px'
       }}
     >
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={1.5}
-      >
-        <Stack spacing={0.5}>
-          <Typography variant="overline" color="text.secondary">
-            Ask the knowledge base
-          </Typography>
-        </Stack>
-      </Stack>
-
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         {suggestedPrompts.map((promptText) => (
           <Chip

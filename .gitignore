@@ -5,3 +5,4 @@ __pycache__
 transcriptions/
 .env
 *.mp4
+parts/

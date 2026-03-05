@@ -2,15 +2,13 @@ import { useEffect, useState } from "react";
 import {
   Box,
   Button,
-  Container,
   CssBaseline,
   Stack,
   ThemeProvider,
-  Typography,
   createTheme,
 } from "@mui/material";
 import KnowledgeWorkspace from "./components/KnowledgeWorkspace";
-import Chat from "./components/Chat";
+import Chat, { type ChatEntry } from "./components/Chat";
 
 const theme = createTheme({
   palette: {
@@ -40,25 +38,38 @@ const theme = createTheme({
 
 type Route = "workspace" | "chat";
 
-const resolveRoute = (hash: string): Route => {
-  if (hash.replace("#", "") === "/chat") return "chat";
-  return "workspace";
+type RouteState = { route: Route; transcriptId: string | null };
+
+const parseHash = (hash: string): RouteState => {
+  const trimmed = hash.startsWith("#") ? hash.slice(1) : hash;
+  const [path = "/", query = ""] = trimmed.split("?");
+  const params = new URLSearchParams(query);
+  const transcriptId = params.get("transcript");
+  const route: Route = path === "/chat" ? "chat" : "workspace";
+  return { route, transcriptId };
 };
 
 const App = () => {
-  const [route, setRoute] = useState<Route>(() =>
-    resolveRoute(window.location.hash),
+  const [routeState, setRouteState] = useState<RouteState>(() =>
+    parseHash(window.location.hash),
   );
+  const [chatMessages, setChatMessages] = useState<ChatEntry[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      text: "I can surface answers from the transcripts, highlights, and summaries in this workspace.",
+    },
+  ]);
 
   useEffect(() => {
-    const handler = () => setRoute(resolveRoute(window.location.hash));
+    const handler = () => setRouteState(parseHash(window.location.hash));
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
   const navigate = (target: Route) => {
     window.location.hash = target === "chat" ? "/chat" : "/";
-    setRoute(target);
+    setRouteState((prev) => ({ ...prev, route: target }));
   };
 
   return (
@@ -103,19 +114,23 @@ const App = () => {
           />
           <Stack direction="row-reverse" spacing={2} pb={2}>
             <Button
-              variant={route === "workspace" ? "contained" : "outlined"}
+              variant={routeState.route === "workspace" ? "contained" : "outlined"}
               onClick={() => navigate("workspace")}
             >
               Workspace
             </Button>
             <Button
-              variant={route === "chat" ? "contained" : "outlined"}
+              variant={routeState.route === "chat" ? "contained" : "outlined"}
               onClick={() => navigate("chat")}
             >
               Chat
             </Button>
           </Stack>
-          {route === "chat" ? <Chat /> : <KnowledgeWorkspace />}
+          {routeState.route === "chat" ? (
+            <Chat messages={chatMessages} setMessages={setChatMessages} />
+          ) : (
+            <KnowledgeWorkspace initialTranscriptId={routeState.transcriptId} />
+          )}
         </Box>
       </Box>
     </ThemeProvider>
