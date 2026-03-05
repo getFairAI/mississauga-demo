@@ -974,8 +974,9 @@ async def transcribe_with_whisperx_endpoint(
             tmp_path.unlink(missing_ok=True)
 
 
-@app.websocket("/ws/{room_id}")
-async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
+async def _room_socket_handler(websocket: WebSocket, room_id: str) -> None:
+    """Shared websocket handler so we can expose multiple paths."""
+
     # Accept early to allow close codes/reasons on failure paths.
     await websocket.accept()
     try:
@@ -992,6 +993,17 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
     except Exception:
         await manager.disconnect(room_id, websocket)
         raise
+
+
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str) -> None:
+    await _room_socket_handler(websocket, room_id)
+
+
+@app.websocket("/api/ws/{room_id}")
+async def websocket_endpoint_with_prefix(websocket: WebSocket, room_id: str) -> None:
+    # Some deployments keep an /api prefix for websocket routes; expose an alias for compatibility.
+    await _room_socket_handler(websocket, room_id)
 
 
 @app.post("/assistant")
