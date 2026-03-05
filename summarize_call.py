@@ -19,32 +19,41 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 
-def generate_summary(transcript_text: str) -> str:
+def generate_summary(
+    transcript_text: str,
+    chunk_index: int | None = None,
+    total_chunks: int | None = None,
+    prior_summary: str | None = None,
+) -> str:
     """
     Gera um resumo completo e detalhado a partir de uma transcrição de chamada.
     """
+    position_note = (
+        f"You are summarizing chunk {chunk_index} of {total_chunks} from a longer transcript."
+        if chunk_index is not None and total_chunks is not None
+        else "You are summarizing a single chunk or the full transcript."
+    )
+
     system_msg = (
-    "You are an assistant specialized in analyzing and summarizing call transcripts.\n"
-    "Your goal is to produce an extremely clear, structured, and comprehensive summary,\n"
-    "preserving ALL relevant information.\n\n"
-    "The summary must include:\n"
-    "- Participants (if mentioned)\n"
-    "- Main topics discussed\n"
-    "- Decisions made\n"
-    "- Action items / next steps\n"
-    "- Dates, amounts, numbers, and any important details\n"
-    "- Problems raised and proposed solutions\n"
-    "- Any commitments or agreements made during the call\n\n"
-    "Do NOT invent information. Everything must come strictly from the transcript.\n"
-    "Write the summary in clear, professional, international business English, "
-    "regardless of the language used in the transcript."
+        "You are an assistant specialized in analyzing and summarizing call transcripts.\n"
+        "Goal: produce a clear, structured, comprehensive summary while avoiding repetition across chunks.\n\n"
+        "When prior_summary is provided, TREAT IT AS THE CURRENT BEST SUMMARY so far.\n"
+        "- Update it with NEW facts from this chunk.\n"
+        "- Do not repeat points already covered unless you add NEW details or corrections.\n"
+        "- Remove or correct items if this chunk shows they were wrong.\n"
+        "- Keep the result concise and readable (aim for 8-14 bullet-style lines or short paragraphs).\n"
+        "- Preserve: participants, main topics, decisions, action items, dates/amounts, problems/solutions, commitments.\n"
+        "- Never invent facts; only use information from prior_summary or this chunk.\n"
+        "- Write in clear, professional international business English.\n"
     )
 
     user_msg = (
-        "Below is the full transcript of a call.\n"
-        "Produce a highly complete and detailed summary.\n\n"
-        "Transcript:\n"
-        f"{transcript_text}"
+        f"{position_note}\n\n"
+        "Prior summary (may be empty):\n"
+        f"{prior_summary or '[none]'}\n\n"
+        "Current chunk transcript:\n"
+        f"{transcript_text}\n\n"
+        "Return the UPDATED overall summary (not just the chunk)."
     )
 
     

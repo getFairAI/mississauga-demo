@@ -154,9 +154,9 @@ TIME_RANGE_RE = re.compile(
     r"\[(?P<start>\d+(?:\.\d+)?)\s*[–-]\s*(?P<end>\d+(?:\.\d+)?)\]\s*(?P<speaker>[^:]+):\s*(?P<text>.*)$"
 )
 ACTIONABLE_SYSTEM_PROMPT = """
-You are a meticulous meeting analyst. Extract the key highlights and the ACTIONABLE topics from the transcript.
+You are a meticulous meeting analyst working on a SINGLE CHUNK of a larger transcript.
 
-Return a compact JSON with two keys:
+Output strictly in compact JSON:
 {
   "highlights": ["short bullet", ...],
   "actionable_topics": [
@@ -166,15 +166,24 @@ Return a compact JSON with two keys:
       "owner": "who is responsible (person/role) or null if not stated",
       "due": "deadline or timeframe if mentioned, otherwise null",
       "impact": "why this matters (short)",
-      "evidence": "direct quote(s) or timestamp reference from the transcript; keep under 40 words"
+      "evidence": "direct quote(s) or timestamp reference from the chunk; keep under 30 words"
     }
   ]
 }
 
-Rules:
-- Use only facts present in the transcript; do not invent owners or dates.
-- Prefer 3-7 actionable topics; if none exist, return an empty list.
-- Keep strings concise and readable.
+Rules for highlights:
+- Produce at most 3 and at least 0 highlights for this chunk.
+- A highlight must be a major decision, conflict, or concrete outcome; ignore mere status updates or chit-chat.
+- Be conservative: if unsure it is noteworthy, do NOT include it.
+
+Rules for actionable_topics:
+- Produce at most 3 and at least 0 items for this chunk.
+- Only include if the chunk states a clear next step or request. If vague or implied, omit it.
+- Do NOT speculate owners, dates, or impact; leave them null/empty if not stated.
+
+Cross-chunk guidance:
+- You will be told the chunk number and total chunks (e.g., chunk 2/5). Avoid repeating items already likely captured in earlier chunks unless new detail is added.
+- Never reference other chunks explicitly; analyze only the provided chunk text.
 """
 
 
@@ -270,18 +279,201 @@ def _normalize_actionable_payload(payload: dict) -> dict:
     return {"highlights": [str(h).strip() for h in highlights if str(h).strip()], "actionable_topics": normalized}
 
 
-def generate_actionable_topics(transcript_text: str, include_quotes: bool = True) -> dict:
-    """Use the LLM to extract highlights and actionable topics from a transcript."""
+def _chunk_transcript_text(transcript_text: str, max_chars: int = 12000) -> List[str]:
+    """Split a transcript into reasonably sized chunks without dropping content."""
+    lines = [line for line in transcript_text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # include newline spacing
+        if current and current_len + line_len > max_chars:
+            chunks.append(current)
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+
+    if current:
+        chunks.append(current)
+
+    return ["\n".join(chunk).strip() for chunk in chunks]
+
+
+def _dedupe_actionables(items: List[dict]) -> List[dict]:
+    """Deduplicate actionable topics by their main descriptive fields."""
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for item in items:
+        key = (
+            (item.get("title") or "").strip().lower(),
+            (item.get("action") or "").strip().lower(),
+            (item.get("owner") or "").strip().lower(),
+            (item.get("due") or "").strip().lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+async def analyze_transcript_job(
+    transcript_text: str,
+    include_quotes: bool,
+    room_id: str,
+    transcript_id: str | None = None,
+    chunk_char_limit: int = 12000,
+) -> None:
+    """Process a transcript in chunks and stream progress/results over websockets."""
+
+    await manager.ensure_room(room_id)
+
+    async def _broadcast(stage: str, detail: dict | None = None) -> None:
+        payload: dict[str, Any] = {"job": "analyze_transcript", "stage": stage, "room_id": room_id}
+        if transcript_id:
+            payload["transcript_id"] = transcript_id
+        if detail:
+            payload.update(detail)
+        await broadcast_json(room_id, payload)
+
+    try:
+        await _broadcast("queued")
+        await _broadcast("running")
+
+        chunks = _chunk_transcript_text(transcript_text, max_chars=chunk_char_limit)
+        total_chunks = max(1, len(chunks))
+        await _broadcast("chunking", {"total_chunks": total_chunks})
+
+        all_highlights: list[str] = []
+        all_actionables: list[dict] = []
+
+        for idx, chunk in enumerate(chunks or [transcript_text], start=1):
+            chunk_result = await asyncio.to_thread(
+                generate_actionable_topics,
+                chunk,
+                include_quotes,
+                idx,
+                total_chunks,
+            )
+            all_highlights.extend(chunk_result.get("highlights", []))
+            all_actionables.extend(chunk_result.get("actionable_topics", []))
+
+            await _broadcast(
+                "chunk_complete",
+                {
+                    "chunk": idx,
+                    "total_chunks": total_chunks,
+                    "analysis": chunk_result,
+                },
+            )
+
+        # Final aggregation without truncation.
+        deduped_highlights = list(dict.fromkeys([h.strip() for h in all_highlights if h.strip()]))
+        deduped_actionables = _dedupe_actionables(all_actionables)
+
+        final_payload = {
+            "transcript_id": transcript_id,
+            "highlights": deduped_highlights,
+            "actionable_topics": deduped_actionables,
+        }
+
+        await _broadcast("finished")
+        await _broadcast("result", {"analysis": final_payload})
+    except Exception as exc:  # pragma: no cover - fast feedback path
+        await _broadcast("error", {"message": str(exc)})
+        raise
+
+
+async def summarize_transcript_job(
+    transcript_text: str,
+    room_id: str,
+    transcript_id: str | None = None,
+    chunk_char_limit: int = 12000,
+    save_summary: bool = False,
+) -> None:
+    """Summarize a transcript in chunks and stream progress/results over websockets."""
+
+    await manager.ensure_room(room_id)
+
+    async def _broadcast(stage: str, detail: dict | None = None) -> None:
+        payload: dict[str, Any] = {"job": "summarize_transcript", "stage": stage, "room_id": room_id}
+        if transcript_id:
+            payload["transcript_id"] = transcript_id
+        if detail:
+            payload.update(detail)
+        await broadcast_json(room_id, payload)
+
+    try:
+        await _broadcast("queued")
+        await _broadcast("running")
+
+        # Lazy import to reuse existing summarizer logic.
+        from summarize_call import generate_summary
+
+        chunks = _chunk_transcript_text(transcript_text, max_chars=chunk_char_limit)
+        total_chunks = max(1, len(chunks))
+        await _broadcast("chunking", {"total_chunks": total_chunks})
+
+        aggregated_summary: str | None = None
+        for idx, chunk in enumerate(chunks or [transcript_text], start=1):
+            aggregated_summary = await asyncio.to_thread(
+                generate_summary,
+                chunk,
+                idx,
+                total_chunks,
+                aggregated_summary,
+            )
+            await _broadcast(
+                "chunk_complete",
+                {
+                    "chunk": idx,
+                    "total_chunks": total_chunks,
+                    "summary": aggregated_summary,
+                    "transcript_id": transcript_id,
+                },
+            )
+
+        final_summary = (aggregated_summary or "").strip()
+        response: dict[str, Any] = {
+            "transcript_id": transcript_id,
+            "summary": final_summary,
+        }
+
+        if save_summary and transcript_id:
+            transcript_path = _resolve_transcript_path(transcript_id)
+            target_path = transcript_path.with_name(f"{transcript_path.stem}_summary.txt")
+            await asyncio.to_thread(target_path.write_text, final_summary, "utf-8")
+            response["summary_file"] = target_path.name
+
+        await _broadcast("finished")
+        await _broadcast("result", {"summary": response})
+    except Exception as exc:  # pragma: no cover - fast feedback path
+        await _broadcast("error", {"message": str(exc)})
+        raise
+
+
+def generate_actionable_topics(
+    transcript_text: str,
+    include_quotes: bool = True,
+    chunk_index: int | None = None,
+    total_chunks: int | None = None,
+) -> dict:
+    """Use the LLM to extract highlights and actionable topics from a transcript or chunk."""
     transcript_text = transcript_text.strip()
     if not transcript_text:
         return {"highlights": [], "actionable_topics": []}
 
-    # Keep payload size manageable; truncate very long transcripts with an explicit notice.
-    max_chars = 24000
-    suffix = ""
-    if len(transcript_text) > max_chars:
-        suffix = "\n\n[Transcript truncated for analysis]"
-        transcript_text = transcript_text[:max_chars] + suffix
+    chunk_note = (
+        f"Chunk info: index={chunk_index}, total={total_chunks}."
+        if chunk_index is not None and total_chunks is not None
+        else "Chunk info: single chunk or unknown position."
+    )
 
     completion = sync_client.chat.completions.create(
         model="gpt-4.1",
@@ -290,7 +482,11 @@ def generate_actionable_topics(transcript_text: str, include_quotes: bool = True
             {"role": "system", "content": ACTIONABLE_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Transcript:\n{transcript_text}\n\nOnly include an 'evidence' quote if include_quotes is true.\ninclude_quotes={include_quotes}",
+                "content": (
+                    f"{chunk_note}\nTranscript:\n{transcript_text}\n\n"
+                    "Only include an 'evidence' quote if include_quotes is true.\n"
+                    f"include_quotes={include_quotes}"
+                ),
             },
         ],
         temperature=0.2,
@@ -620,7 +816,7 @@ async def get_transcription(
 
 @app.post("/transcriptions/analyze")
 async def analyze_transcription(payload: AnalyzeTranscriptRequest) -> dict:
-    """Extract highlights and actionable topics from a transcript file or raw text."""
+    """Kick off transcript analysis; return room id for streaming progress/results."""
     if not (payload.transcript_id or (payload.transcript_text and payload.transcript_text.strip())):
         raise HTTPException(status_code=400, detail="Provide either transcript_id or transcript_text.")
 
@@ -638,21 +834,25 @@ async def analyze_transcription(payload: AnalyzeTranscriptRequest) -> dict:
     if not transcript_text.strip():
         raise HTTPException(status_code=400, detail="Transcript is empty.")
 
-    try:
-        analysis = await asyncio.to_thread(generate_actionable_topics, transcript_text, payload.include_quotes)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to analyze transcript: {exc}") from exc
+    room_id = await manager.create_room()
+    await manager.ensure_room(room_id)
 
-    return {
-        "transcript_id": chosen_id,
-        "highlights": analysis["highlights"],
-        "actionable_topics": analysis["actionable_topics"],
-    }
+    # Run analysis asynchronously and stream updates via websocket.
+    asyncio.create_task(
+        analyze_transcript_job(
+            transcript_text=transcript_text,
+            include_quotes=payload.include_quotes,
+            room_id=room_id,
+            transcript_id=chosen_id,
+        )
+    )
+
+    return {"room_id": room_id, "status": "started", "transcript_id": chosen_id}
 
 
 @app.post("/transcriptions/summarize")
 async def summarize_transcription(payload: SummarizeTranscriptRequest) -> dict:
-    """Summarize a transcript using the existing summarize_call.py helper."""
+    """Start a background summary job; results stream via websocket."""
     if not (payload.transcript_id or (payload.transcript_text and payload.transcript_text.strip())):
         raise HTTPException(status_code=400, detail="Provide either transcript_id or transcript_text.")
 
@@ -664,7 +864,6 @@ async def summarize_transcription(payload: SummarizeTranscriptRequest) -> dict:
 
     transcript_text: str
     chosen_id: str | None = None
-    transcript_path: Path | None = None
 
     if payload.transcript_id:
         transcript_path = _resolve_transcript_path(payload.transcript_id)
@@ -676,33 +875,19 @@ async def summarize_transcription(payload: SummarizeTranscriptRequest) -> dict:
     if not transcript_text.strip():
         raise HTTPException(status_code=400, detail="Transcript is empty.")
 
-    try:
-        # Lazy import to keep startup fast and reuse the existing summarizer logic.
-        from summarize_call import generate_summary
-    except Exception as exc:  # pragma: no cover - defensive path
-        raise HTTPException(status_code=500, detail=f"Failed to load summarizer: {exc}") from exc
+    room_id = await manager.create_room()
+    await manager.ensure_room(room_id)
 
-    try:
-        summary = await asyncio.to_thread(generate_summary, transcript_text)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to summarize transcript: {exc}") from exc
+    asyncio.create_task(
+        summarize_transcript_job(
+            transcript_text=transcript_text,
+            room_id=room_id,
+            transcript_id=chosen_id,
+            save_summary=payload.save_summary,
+        )
+    )
 
-    summary_file: str | None = None
-    if payload.save_summary and transcript_path is not None:
-        target_path = transcript_path.with_name(f"{transcript_path.stem}_summary.txt")
-        try:
-            await asyncio.to_thread(target_path.write_text, summary, "utf-8")
-            summary_file = target_path.name
-        except Exception as exc:  # pragma: no cover - defensive path
-            raise HTTPException(
-                status_code=500,
-                detail=f"Summary generated but failed to persist: {exc}",
-            ) from exc
-
-    response = {"transcript_id": chosen_id, "summary": summary}
-    if summary_file:
-        response["summary_file"] = summary_file
-    return response
+    return {"room_id": room_id, "status": "started", "transcript_id": chosen_id, "save_summary": payload.save_summary}
 
 
 @app.get("/transcriptions/{transcript_id}/summary")

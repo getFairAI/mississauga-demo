@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Box,
@@ -13,8 +13,6 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
-  Switch,
-  FormControlLabel,
   Pagination,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
@@ -46,6 +44,7 @@ import {
   fetchTranscript,
   fetchSummary,
   listTranscriptions,
+  openProgressSocket,
   streamTranscriptPages,
   summarizeTranscript,
 } from "../api";
@@ -166,11 +165,25 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<{
+    status: "idle" | "queued" | "running" | "chunking" | "chunk_complete" | "finished" | "error";
+    current?: number;
+    total?: number;
+    message?: string;
+  }>({ status: "idle" });
+  const analysisSocketRef = useRef<WebSocket | null>(null);
+
+  const [summaryProgress, setSummaryProgress] = useState<{
+    status: "idle" | "queued" | "running" | "chunking" | "chunk_complete" | "finished" | "error";
+    current?: number;
+    total?: number;
+    message?: string;
+  }>({ status: "idle" });
+  const summarySocketRef = useRef<WebSocket | null>(null);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false); // for generation
   const [summaryFetching, setSummaryFetching] = useState(false); // for initial fetch
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [saveSummary, setSaveSummary] = useState(false);
 
   const [value, setValue] = useState("1");
 
@@ -268,8 +281,12 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
   useEffect(() => {
     setAnalysis(null);
     setAnalysisError(null);
+    setAnalysisProgress({ status: "idle" });
+    closeAnalysisSocket();
     setSummary(null);
     setSummaryError(null);
+    setSummaryProgress({ status: "idle" });
+    closeSummarySocket();
     let cancelled = false;
     if (!selectedId) return;
     const load = async () => {
@@ -304,6 +321,63 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
   const transcriptLines: TranscriptLine[] =
     mode === "full" ? (fullTranscript?.lines ?? []) : (activePage?.lines ?? []);
 
+  const analysisProgressLabel = useMemo(() => {
+    switch (analysisProgress.status) {
+      case "queued":
+        return "Analysis queued";
+      case "running":
+        return "Analysis running";
+      case "chunking":
+        return analysisProgress.total
+          ? `Preparing ${analysisProgress.total} chunk${analysisProgress.total === 1 ? "" : "s"}…`
+          : "Preparing chunks…";
+      case "chunk_complete":
+        return analysisProgress.total
+          ? `Processed chunk ${analysisProgress.current ?? 0} of ${analysisProgress.total}`
+          : "Processed chunk";
+      case "error":
+        return analysisProgress.message || "Analysis failed";
+      case "finished":
+      default:
+        return "";
+    }
+  }, [analysisProgress]);
+
+  const analysisProgressValue = useMemo(() => {
+    if (!analysisProgress.total) return undefined;
+    const current = analysisProgress.current ?? 0;
+    return Math.min(100, Math.round((current / analysisProgress.total) * 100));
+  }, [analysisProgress]);
+
+  const summaryProgressLabel = useMemo(() => {
+    switch (summaryProgress.status) {
+      case "queued":
+        return "Summary queued";
+      case "running":
+        return "Summarizing transcript";
+      case "chunking":
+        return summaryProgress.total
+          ? `Preparing ${summaryProgress.total} chunk${summaryProgress.total === 1 ? "" : "s"}…`
+          : "Preparing chunks…";
+      case "chunk_complete":
+        return summaryProgress.total
+          ? `Summarized chunk ${summaryProgress.current ?? 0} of ${summaryProgress.total}`
+          : "Summarized chunk";
+      case "finished":
+        return "Finalizing summary…";
+      case "error":
+        return summaryProgress.message || "Summary failed";
+      default:
+        return "";
+    }
+  }, [summaryProgress]);
+
+  const summaryProgressValue = useMemo(() => {
+    if (!summaryProgress.total) return undefined;
+    const current = summaryProgress.current ?? 0;
+    return Math.min(100, Math.round((current / summaryProgress.total) * 100));
+  }, [summaryProgress]);
+
   const transcriptText = useMemo(
     () => transcriptLines.map((line) => lineLabel(line)).join("\n"),
     [transcriptLines],
@@ -335,6 +409,29 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
     }, []);
   }, [transcriptLines]);
 
+  const closeAnalysisSocket = () => {
+    const ws = analysisSocketRef.current;
+    if (ws) {
+      ws.close();
+      analysisSocketRef.current = null;
+    }
+  };
+
+  const closeSummarySocket = () => {
+    const ws = summarySocketRef.current;
+    if (ws) {
+      ws.close();
+      summarySocketRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      closeAnalysisSocket();
+      closeSummarySocket();
+    };
+  }, []);
+
   const speakerColorMap = useMemo(() => {
     const palette = [
       "#0f766e",
@@ -359,18 +456,103 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
       setAnalysisError("Load a transcript first.");
       return;
     }
+
+    const mergeAnalysis = (incoming: AnalysisResponse) => {
+      setAnalysis((prev) => {
+        const highlights = Array.from(
+          new Set([...(prev?.highlights ?? []), ...(incoming.highlights ?? [])]),
+        );
+
+        const existing = prev?.actionable_topics ?? [];
+        const nextActionables = [...existing];
+        incoming.actionable_topics?.forEach((item) => {
+          const key = `${(item.title || "").toLowerCase()}|${(item.action || "").toLowerCase()}|${(item.owner || "").toLowerCase()}|${(item.due || "").toLowerCase()}`;
+          const already = nextActionables.some((a) =>
+            `${(a.title || "").toLowerCase()}|${(a.action || "").toLowerCase()}|${(a.owner || "").toLowerCase()}|${(a.due || "").toLowerCase()}` === key,
+          );
+          if (!already) nextActionables.push(item);
+        });
+
+        return {
+          transcript_id: incoming.transcript_id ?? prev?.transcript_id ?? selectedId ?? undefined,
+          highlights,
+          actionable_topics: nextActionables,
+        };
+      });
+    };
+
     try {
+      closeAnalysisSocket();
+      setAnalysis(null);
       setAnalysisLoading(true);
       setAnalysisError(null);
-      const result = await analyzeTranscript({
+      setAnalysisProgress({ status: "queued" });
+
+      const start = await analyzeTranscript({
         transcript_id: selectedId ?? undefined,
-        transcript_text: transcriptText,
       });
-      setAnalysis(result);
+
+      const socket = openProgressSocket(start.room_id, (payload) => {
+        if (typeof payload === "string") return; // join message or plain text
+        const data = payload as Record<string, any>;
+        if (data.job !== "analyze_transcript") return;
+
+        const stage = data.stage as string | undefined;
+        if (!stage) return;
+
+        if (stage === "queued" || stage === "running") {
+          setAnalysisProgress({ status: stage as any });
+          return;
+        }
+
+        if (stage === "chunking") {
+          setAnalysisProgress({ status: "chunking", total: data.total_chunks });
+          return;
+        }
+
+        if (stage === "chunk_complete") {
+          setAnalysisProgress({
+            status: "chunk_complete",
+            current: data.chunk ?? 0,
+            total: data.total_chunks,
+          });
+          if (data.analysis) {
+            mergeAnalysis(data.analysis as AnalysisResponse);
+          }
+          return;
+        }
+
+        if (stage === "finished") {
+          setAnalysisProgress((prev) => ({ ...prev, status: "finished" }));
+          return;
+        }
+
+        if (stage === "result") {
+          if (data.analysis) {
+            setAnalysis(data.analysis as AnalysisResponse);
+          }
+          setAnalysisLoading(false);
+          setAnalysisProgress((prev) => ({ ...prev, status: "finished" }));
+          closeAnalysisSocket();
+          return;
+        }
+
+        if (stage === "error") {
+          const message = (data.message as string) || "Analysis failed.";
+          setAnalysisError(message);
+          setAnalysisLoading(false);
+          setAnalysisProgress({ status: "error", message });
+          closeAnalysisSocket();
+        }
+      });
+
+      analysisSocketRef.current = socket;
     } catch (err) {
       setAnalysisError((err as Error).message);
-    } finally {
+      setAnalysisProgress({ status: "error", message: (err as Error).message });
       setAnalysisLoading(false);
+    } finally {
+      // keep spinner controlled by websocket events
     }
   };
 
@@ -379,20 +561,82 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
       setSummaryError("Load a transcript first.");
       return;
     }
+
     try {
+      closeSummarySocket();
+      setSummary(null);
       setSummaryLoading(true);
       setSummaryError(null);
-      setSummary(null);
-      const result = await summarizeTranscript({
+      setSummaryProgress({ status: "queued" });
+
+      const start = await summarizeTranscript({
         transcript_id: selectedId ?? undefined,
-        transcript_text: transcriptText,
-        save_summary: saveSummary,
       });
-      setSummary(result);
+
+      const socket = openProgressSocket(start.room_id, (payload) => {
+        if (typeof payload === "string") return;
+        const data = payload as Record<string, any>;
+        if (data.job !== "summarize_transcript") return;
+
+        const stage = data.stage as string | undefined;
+        if (!stage) return;
+
+        if (stage === "queued" || stage === "running") {
+          setSummaryProgress({ status: stage as any });
+          return;
+        }
+
+        if (stage === "chunking") {
+          setSummaryProgress({ status: "chunking", total: data.total_chunks });
+          return;
+        }
+
+        if (stage === "chunk_complete") {
+          setSummaryProgress({
+            status: "chunk_complete",
+            current: data.chunk ?? 0,
+            total: data.total_chunks,
+          });
+          if (typeof data.summary === "string") {
+            setSummary({
+              transcript_id: (data.transcript_id ?? start.transcript_id) as string | undefined,
+              summary: data.summary,
+            } as SummaryResponse);
+          }
+          return;
+        }
+
+        if (stage === "finished") {
+          setSummaryProgress((prev) => ({ ...prev, status: "finished" }));
+          return;
+        }
+
+        if (stage === "result") {
+          if (data.summary) {
+            setSummary(data.summary as SummaryResponse);
+          }
+          setSummaryLoading(false);
+          setSummaryProgress((prev) => ({ ...prev, status: "finished" }));
+          closeSummarySocket();
+          return;
+        }
+
+        if (stage === "error") {
+          const message = (data.message as string) || "Summary failed.";
+          setSummaryError(message);
+          setSummaryLoading(false);
+          setSummaryProgress({ status: "error", message });
+          closeSummarySocket();
+        }
+      });
+
+      summarySocketRef.current = socket;
     } catch (err) {
       setSummaryError((err as Error).message);
-    } finally {
+      setSummaryProgress({ status: "error", message: (err as Error).message });
       setSummaryLoading(false);
+    } finally {
+      // spinner controlled by websocket lifecycle
     }
   };
 
@@ -735,9 +979,6 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                     <Typography variant="subtitle1" fontWeight={700}>
                       Summary
                     </Typography>
-                    {(summaryFetching || summaryLoading) && (
-                      <CircularProgress size={18} thickness={5} />
-                    )}
                   </Stack>
                   <Stack
                     direction="row"
@@ -746,19 +987,6 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                     flexWrap="wrap"
                     justifyContent="flex-end"
                   >
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          size="small"
-                          checked={saveSummary}
-                          onChange={(_, val) => setSaveSummary(val)}
-                        />
-                      }
-                      label="Save to backend"
-                    />
-                    {summaryLoading && (
-                      <CircularProgress size={22} thickness={5} />
-                    )}
                     <Button
                       variant="contained"
                       size="small"
@@ -777,14 +1005,33 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                   </Alert>
                 )}
 
-                {!summary && !summaryFetching && (
+                {summaryProgress.status !== "idle" && summaryProgress.status !== "finished" && (
+                  <Stack spacing={0.5} mb={1.25}>
+                    <LinearProgress
+                      variant={summaryProgressValue !== undefined ? "determinate" : "indeterminate"}
+                      value={summaryProgressValue}
+                      sx={{ borderRadius: 999 }}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {summaryProgressLabel}
+                    </Typography>
+                  </Stack>
+                )}
+
+                {!summary && !summaryFetching && summaryProgress.status === "idle" && (
                   <Typography variant="body2" color="text.secondary">
                     Load a transcript and click “Generate summary” to create a
                     concise recap.
                   </Typography>
                 )}
 
-                {summary && (
+                {summaryProgress.status !== "finished" && (
+                  <Typography variant="body2" color="text.secondary">
+                    Awaiting summary results…
+                  </Typography>
+                )}
+
+                {summary && summaryProgress.status === "finished" && (
                   <Stack spacing={1.5}>
                     {summary.headline && (
                       <Typography variant="h6" fontWeight={700}>
@@ -869,10 +1116,29 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                   </Alert>
                 )}
 
-                {!analysis && (
+                {analysisProgress.status !== "idle" && analysisProgress.status !== "finished" && (
+                  <Stack spacing={0.5} mb={1.25}>
+                    <LinearProgress
+                      variant={analysisProgressValue !== undefined ? "determinate" : "indeterminate"}
+                      value={analysisProgressValue}
+                      sx={{ borderRadius: 999 }}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {analysisProgressLabel}
+                    </Typography>
+                  </Stack>
+                )}
+
+                {!analysis && analysisProgress.status === "idle" && (
                   <Typography variant="body2" color="text.secondary">
                     Load a transcript and click “Find actionables” to extract
                     highlights and next steps.
+                  </Typography>
+                )}
+
+                {!analysis && analysisProgress.status !== "idle" && (
+                  <Typography variant="body2" color="text.secondary">
+                    Awaiting analysis results…
                   </Typography>
                 )}
 
@@ -945,7 +1211,7 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                               >
                                 <Chip
                                   size="small"
-                                  label={item.owner ? item.owner : "Owner TBC"}
+                                  label={item.owner ? item.owner : "Owner Unknown"}
                                   color={item.owner ? "primary" : "default"}
                                   variant={item.owner ? "filled" : "outlined"}
                                 />

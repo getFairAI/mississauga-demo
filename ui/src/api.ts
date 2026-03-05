@@ -55,10 +55,23 @@ export type SummaryResponse = {
   bullets?: string[];
 };
 
+export type SummaryStartResponse = {
+  room_id: string;
+  status: string;
+  transcript_id?: string | null;
+  save_summary?: boolean;
+};
+
 export type AnalysisResponse = {
   transcript_id?: string | null;
   highlights: string[];
   actionable_topics: ActionableTopic[];
+};
+
+export type AnalyzeStartResponse = {
+  room_id: string;
+  status: string;
+  transcript_id?: string | null;
 };
 
 export type AssistantSource = {
@@ -111,23 +124,20 @@ export async function sendWhisperX(file: File, device = "cuda", roomId?: string)
 }
 
 export async function summarizeTranscript(body: {
-  transcript_text?: string;
   transcript_id?: string;
-  save_summary?: boolean;
 }) {
   const res = await fetch(`${API_BASE}/transcriptions/summarize`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       transcript_id: body.transcript_id,
-      transcript_text: body.transcript_text,
-      save_summary: body.save_summary ?? false,
+      save_summary: true,
     }),
   });
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return res.json() as Promise<SummaryResponse>;
+  return res.json() as Promise<SummaryStartResponse>;
 }
 
 export async function fetchSummary(transcriptId: string): Promise<SummaryResponse | null> {
@@ -141,7 +151,7 @@ export async function fetchSummary(transcriptId: string): Promise<SummaryRespons
   return res.json() as Promise<SummaryResponse>;
 }
 
-export async function analyzeTranscript(body: { transcript_text?: string; transcript_id?: string }) {
+export async function analyzeTranscript(body: { transcript_id?: string }) {
   const res = await fetch(`${API_BASE}/transcriptions/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -150,7 +160,7 @@ export async function analyzeTranscript(body: { transcript_text?: string; transc
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return res.json() as Promise<AnalysisResponse>;
+  return res.json() as Promise<AnalyzeStartResponse>;
 }
 
 export function openProgressSocket(roomId: string, onMessage: (data: unknown) => void) {
