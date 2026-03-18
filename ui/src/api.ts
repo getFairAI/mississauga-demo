@@ -8,6 +8,8 @@ export type TranscriptListItem = {
   line_count: number;
   duration: number | null;
   topic: string;
+  argument_map_file?: string | null;
+  has_argument_map?: boolean;
 };
 
 export type TranscriptLine = {
@@ -72,6 +74,39 @@ export type AnalyzeStartResponse = {
   room_id: string;
   status: string;
   transcript_id?: string | null;
+};
+
+export type ArgumentMapPayload = {
+  word_count?: {
+    raw?: number;
+    critical_words?: string[];
+    compression_ratio?: number | string;
+  };
+  argument_map?: {
+    agenda?: { item?: string; presenter?: string | null }[];
+    core_questions?: Array<{
+      question?: string;
+      negation_url?: string;
+      type?: string;
+      unresolved?: boolean;
+      options_or_claims?: Array<{ label?: string; claim?: string; support?: string[] }>;
+      evidence?: Array<{ speaker?: string; timestamp?: string; quote?: string }>;
+    }>;
+  };
+  raw?: unknown;
+};
+
+export type ArgumentMapResponse = {
+  transcript_id?: string;
+  argument_map_file?: string;
+  argument_map: ArgumentMapPayload;
+};
+
+export type ArgumentMapStartResponse = {
+  room_id?: string;
+  status: string;
+  transcript_id?: string | null;
+  argument_map_file?: string | null;
 };
 
 export type AssistantSource = {
@@ -161,6 +196,77 @@ export async function analyzeTranscript(body: { transcript_id?: string }) {
     throw new Error(await res.text());
   }
   return res.json() as Promise<AnalyzeStartResponse>;
+}
+
+export async function buildArgumentMap(body: { transcript_id?: string }) {
+  const res = await fetch(`${API_BASE}/transcriptions/argument-map`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<ArgumentMapStartResponse>;
+}
+
+export async function fetchArgumentMap(transcriptId: string): Promise<ArgumentMapResponse | null> {
+  const res = await fetch(
+    `${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}/argument-map`,
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<ArgumentMapResponse>;
+}
+
+export async function sliceAudioSegment(params: {
+  file: File;
+  start: number;
+  end: number;
+  output_format?: "mp3" | "wav";
+}): Promise<{ url: string; contentType: string | null }> {
+  const form = new FormData();
+  form.append("file", params.file);
+  form.append("start", String(params.start));
+  form.append("end", String(params.end));
+  form.append("output_format", params.output_format ?? "mp3");
+
+  const res = await fetch(`${API_BASE}/audio/slice`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  return { url, contentType: res.headers.get("Content-Type") };
+}
+
+export async function sliceAudioByTranscript(params: {
+  transcript_id: string;
+  start: number;
+  end: number;
+  output_format?: "mp3" | "wav";
+}): Promise<{ url: string; contentType: string | null }> {
+  const res = await fetch(`${API_BASE}/audio/slice-by-id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      transcript_id: params.transcript_id,
+      start: params.start,
+      end: params.end,
+      output_format: params.output_format ?? "mp3",
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  return { url, contentType: res.headers.get("Content-Type") };
 }
 
 export function openProgressSocket(roomId: string, onMessage: (data: unknown) => void) {

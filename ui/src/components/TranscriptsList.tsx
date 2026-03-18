@@ -152,6 +152,7 @@ const TranscriptsList = ({ transcripts, loadingList, selectedId, setSelectedId }
     const tags: string[] = [];
     if (item.duration) tags.push("Recorded");
     if (item.line_count > 0) tags.push("Transcript");
+    if (item.has_argument_map) tags.push("Key items");
     return tags;
   };
 

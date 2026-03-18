@@ -11,17 +11,28 @@ import uuid
 import re
 import random
 import math
+import tempfile
+import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Set, AsyncGenerator
 
-from fastapi import File, Form, FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, Request
+from fastapi import (
+    BackgroundTasks,
+    File,
+    Form,
+    FastAPI,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import openai
-from fastapi import Form
 from typing import Optional
 import textwrap
 
@@ -137,6 +148,11 @@ class SummarizeTranscriptRequest(BaseModel):
     save_summary: bool = False
 
 
+class ArgumentMapRequest(BaseModel):
+    transcript_id: str | None = None
+    transcript_text: str | None = None
+
+
 app = FastAPI(title="WebSocket Room Server")
 app.add_middleware(
     CORSMiddleware,
@@ -150,6 +166,8 @@ manager = RoomManager()
 sync_client = OpenAI()
 async_client = AsyncOpenAI()
 TRANSCRIPTS_DIR = Path("./transcriptions")
+SUPPORTED_AUDIO_FORMATS = {"mp3", "wav"}
+SUPPORTED_MEDIA_EXTS = (".mp3", ".wav", ".m4a", ".mp4", ".mov")
 TIME_RANGE_RE = re.compile(
     r"\[(?P<start>\d+(?:\.\d+)?)\s*[–-]\s*(?P<end>\d+(?:\.\d+)?)\]\s*(?P<speaker>[^:]+):\s*(?P<text>.*)$"
 )
@@ -184,6 +202,26 @@ Rules for actionable_topics:
 Cross-chunk guidance:
 - You will be told the chunk number and total chunks (e.g., chunk 2/5). Avoid repeating items already likely captured in earlier chunks unless new detail is added.
 - Never reference other chunks explicitly; analyze only the provided chunk text.
+"""
+
+ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT = """
+You are an argument mapping assistant. Given a meeting transcript, produce the following two artifacts:
+
+ARTIFACT 1: WORD COUNT
+	∙	Raw transcript word count
+	∙	Critical words (substantive claims, decisions, unresolved questions only)
+	∙	Compression ratio
+
+ARTIFACT 2: ARGUMENT MAP
+	1.	Before mapping anything, scan the entire transcript end to end and identify every agenda item and presenter. List them explicitly. This list is your completeness checklist.
+	2.	Identify all core questions being debated across the full transcript. Every agenda item and presenter must contribute at least one core question or node to the map. Do not finalize the map until you have verified this against your checklist.
+	3.	For each core question, determine the question type:
+	∙	Open question — multiple competing approaches or options exist → use Options structure (O1, O2, O3…)
+	∙	Closed question — yes/no, worth doing or not, important or not → use Claim structure directly (S, N, M on the claim itself)
+	5.	Flag Unresolved items — questions raised but never answered in the transcript
+	6.	Strip all small talk, pleasantries, and off-topic content
+	7.	Use exact quotes where possible, attributed to named speakers with timestamps
+	9.	Use only information explicitly stated in the transcript. Do not import external knowledge, prior research, or context from outside the meeting.
 """
 
 
@@ -458,6 +496,46 @@ async def summarize_transcript_job(
         raise
 
 
+async def argument_map_job(
+    transcript_text: str,
+    room_id: str,
+    transcript_id: str | None = None,
+    save_path: Path | None = None,
+) -> None:
+    """Generate an argument map and stream progress/results."""
+    await manager.ensure_room(room_id)
+
+    async def _broadcast(stage: str, detail: dict | None = None) -> None:
+        payload: dict[str, Any] = {"job": "argument_map", "stage": stage, "room_id": room_id}
+        if transcript_id:
+            payload["transcript_id"] = transcript_id
+        if detail:
+            payload.update(detail)
+        await broadcast_json(room_id, payload)
+
+    try:
+        await _broadcast("queued")
+        await _broadcast("running")
+
+        result = await asyncio.to_thread(generate_argument_map, transcript_text)
+
+        if save_path is not None:
+            # Persist pretty JSON for downstream consumption.
+            await asyncio.to_thread(save_path.write_text, json.dumps(result, indent=2), "utf-8")
+
+        await _broadcast("finished")
+        await _broadcast(
+            "result",
+            {
+                "argument_map": result,
+                "argument_map_file": save_path.name if save_path else None,
+            },
+        )
+    except Exception as exc:  # pragma: no cover - fast feedback path
+        await _broadcast("error", {"message": str(exc)})
+        raise
+
+
 def generate_actionable_topics(
     transcript_text: str,
     include_quotes: bool = True,
@@ -500,6 +578,65 @@ def generate_actionable_topics(
         payload = {"highlights": [textwrap.shorten(transcript_text, width=180, placeholder="…")], "actionable_topics": []}
 
     return _normalize_actionable_payload(payload)
+
+
+def generate_argument_map(transcript_text: str) -> dict:
+    """Build an argument map and word stats for a full transcript."""
+    transcript_text = (transcript_text or "").strip()
+    if not transcript_text:
+        return {}
+
+    desired_schema = {
+        "word_count": {
+            "raw": "integer total words in transcript",
+            "critical_words": ["list of key claim/decision/question words or short phrases"],
+            "compression_ratio": "float between 0 and 1 or >0 showing compression vs raw",
+        },
+        "argument_map": {
+            "agenda": [
+                {"item": "agenda item", "presenter": "speaker name or null"},
+            ],
+            "core_questions": [
+                {
+                    "question": "core debated question",
+                    "type": "open|closed",
+                    "unresolved": True,
+                    "options_or_claims": [
+                        {"label": "O1/S/N/M", "claim": "text", "support": ["quotes with timestamps"]},
+                    ],
+                    "evidence": [
+                        {"speaker": "name", "timestamp": "start-end", "quote": "exact quote"},
+                    ],
+                }
+            ],
+        },
+    }
+
+    completion = sync_client.chat.completions.create(
+        model="gpt-4.1",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Return a compact JSON object following this shape:\n"
+                    f"{json.dumps(desired_schema, indent=2)}\n"
+                    "Use only data from the transcript. If a field is unknown, use null or an empty list.\n\n"
+                    f"Transcript:\n{transcript_text}"
+                ),
+            },
+        ],
+        temperature=0.2,
+    )
+
+    raw = completion.choices[0].message.content
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        # Fall back to a minimal structure if parsing fails.
+        payload = {"word_count": {}, "argument_map": {"agenda": [], "core_questions": []}, "raw": raw}
+    return payload
 
 
 async def broadcast_json(room_id: str, payload: dict, sender: WebSocket | None = None) -> int:
@@ -723,6 +860,34 @@ async def save_upload_to_temp(upload: UploadFile) -> Path:
     return tmp_path
 
 
+def _cleanup_files(paths: List[Path]) -> None:
+    """Best-effort deletion of temporary files."""
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            # Keep cleanup non-blocking and tolerant to races.
+            pass
+
+
+def _find_media_for_transcript(transcript_id: str) -> Path:
+    """Locate a media file that matches the transcript stem."""
+    stem = Path(transcript_id).stem
+    candidates: list[Path] = []
+
+    # Search in current working directory and common subfolders.
+    search_roots = [Path("."), Path("./data"), Path("./parts"), Path("./chunks")]
+    for root in search_roots:
+        for ext in SUPPORTED_MEDIA_EXTS:
+            candidate = root / f"{stem}{ext}"
+            if candidate.exists():
+                candidates.append(candidate)
+    if candidates:
+        # Prefer shortest path / first found.
+        return candidates[0]
+    raise HTTPException(status_code=404, detail=f"No media file found for transcript '{transcript_id}'.")
+
+
 @app.post("/rooms", response_model=RoomResponse)
 async def create_room() -> RoomResponse:
     room_id = await manager.create_room()
@@ -755,6 +920,7 @@ async def list_transcriptions() -> dict:
                 continue
             lines, topic = parse_transcript_file(path)
             duration = lines[-1].end if lines else None
+            argument_map_path = path.with_name(f"{path.stem}_argument_map.json")
             items.append(
                 {
                     "id": path.name,
@@ -762,6 +928,8 @@ async def list_transcriptions() -> dict:
                     "topic": topic,
                     "line_count": len(lines),
                     "duration": duration,
+                    "argument_map_file": argument_map_path.name if argument_map_path.exists() else None,
+                    "has_argument_map": argument_map_path.exists(),
                 }
             )
     return {"items": items}
@@ -890,6 +1058,77 @@ async def summarize_transcription(payload: SummarizeTranscriptRequest) -> dict:
     return {"room_id": room_id, "status": "started", "transcript_id": chosen_id, "save_summary": payload.save_summary}
 
 
+@app.post("/transcriptions/argument-map")
+async def build_argument_map(payload: ArgumentMapRequest) -> dict:
+    """Start an argument-map job using the dedicated prompt and persist the result to JSON."""
+    if not (payload.transcript_id or (payload.transcript_text and payload.transcript_text.strip())):
+        raise HTTPException(status_code=400, detail="Provide either transcript_id or transcript_text.")
+
+    transcript_text: str
+    chosen_id: str | None = None
+
+    TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if payload.transcript_id:
+        transcript_path = _resolve_transcript_path(payload.transcript_id)
+        transcript_text = transcript_path.read_text(encoding="utf-8")
+        chosen_id = transcript_path.name
+        save_path = transcript_path.with_name(f"{transcript_path.stem}_argument_map.json")
+        # Short-circuit if already generated for this transcript.
+        if save_path.exists():
+            return {
+                "status": "already_exists",
+                "transcript_id": chosen_id,
+                "argument_map_file": save_path.name,
+            }
+    else:
+        transcript_text = payload.transcript_text or ""
+        save_path = TRANSCRIPTS_DIR / f"argument_map_{uuid.uuid4().hex}.json"
+
+    if not transcript_text.strip():
+        raise HTTPException(status_code=400, detail="Transcript is empty.")
+
+    room_id = await manager.create_room()
+    await manager.ensure_room(room_id)
+
+    asyncio.create_task(
+        argument_map_job(
+            transcript_text=transcript_text,
+            room_id=room_id,
+            transcript_id=chosen_id,
+            save_path=save_path,
+        )
+    )
+
+    return {
+        "room_id": room_id,
+        "status": "started",
+        "transcript_id": chosen_id,
+        "argument_map_file": save_path.name,
+    }
+
+
+@app.get("/transcriptions/{transcript_id}/argument-map")
+async def get_argument_map(transcript_id: str) -> dict:
+    """Return a previously saved argument map for a transcript."""
+    transcript_path = _resolve_transcript_path(transcript_id)
+    argument_map_path = transcript_path.with_name(f"{transcript_path.stem}_argument_map.json")
+
+    if not argument_map_path.exists():
+        raise HTTPException(status_code=404, detail="Argument map not found for this transcript.")
+
+    try:
+        argument_map = json.loads(argument_map_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive path
+        raise HTTPException(status_code=500, detail=f"Failed to read argument map: {exc}") from exc
+
+    return {
+        "transcript_id": transcript_path.name,
+        "argument_map_file": argument_map_path.name,
+        "argument_map": argument_map,
+    }
+
+
 @app.get("/transcriptions/{transcript_id}/summary")
 async def get_transcription_summary(transcript_id: str) -> dict:
     """Return a previously saved summary for a transcript.
@@ -972,6 +1211,166 @@ async def transcribe_with_whisperx_endpoint(
     finally:
         if tmp_path and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/audio/slice")
+async def slice_audio_segment(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    start: float = Form(..., description="Start time in seconds (>= 0)."),
+    end: float = Form(..., description="End time in seconds (> start)."),
+    output_format: str = Form("mp3", description="Output format. Supported: mp3, wav."),
+) -> StreamingResponse:
+    """Slice an uploaded audio/video file and return the trimmed audio."""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise HTTPException(
+            status_code=500,
+            detail="ffmpeg is required on the server to slice audio.",
+        )
+
+    fmt = str(output_format).lower().lstrip(".")
+    if fmt not in SUPPORTED_AUDIO_FORMATS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_FORMATS))
+        raise HTTPException(status_code=400, detail=f"Unsupported output_format '{fmt}'. Use one of: {allowed}.")
+
+    if start < 0:
+        raise HTTPException(status_code=400, detail="start must be greater than or equal to 0.")
+    if end <= start:
+        raise HTTPException(status_code=400, detail="end must be greater than start.")
+
+    input_path = await save_upload_to_temp(file)
+    tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=f".{fmt}")
+    output_path = Path(tmp_out.name)
+    tmp_out.close()
+
+    codec_args = ["-c:a", "libmp3lame", "-b:a", "192k"] if fmt == "mp3" else ["-c:a", "pcm_s16le"]
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{start}",
+        "-to",
+        f"{end}",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "2",
+        "-ar",
+        "44100",
+        *codec_args,
+        str(output_path),
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        _cleanup_files([input_path, output_path])
+        detail = stderr.decode().strip() or "ffmpeg failed."
+        raise HTTPException(status_code=500, detail=detail)
+
+    # Ensure temporary files are removed after the response is sent.
+    background_tasks.add_task(_cleanup_files, [input_path, output_path])
+
+    media_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
+    base_name = Path(file.filename or "audio").stem
+    suggested_name = f"{base_name}_{start:.2f}-{end:.2f}.{fmt}"
+
+    return StreamingResponse(
+        output_path.open("rb"),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename=\"{suggested_name}\"'},
+        background=background_tasks,
+    )
+
+
+class SliceByIdRequest(BaseModel):
+    transcript_id: str
+    start: float
+    end: float
+    output_format: str | None = "mp3"
+
+
+@app.post("/audio/slice-by-id")
+async def slice_audio_by_id(payload: SliceByIdRequest, background_tasks: BackgroundTasks) -> StreamingResponse:
+    """Slice a stored media file that matches the transcript id and return trimmed audio."""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise HTTPException(
+            status_code=500,
+            detail="ffmpeg is required on the server to slice audio.",
+        )
+
+    fmt = (payload.output_format or "mp3").lower().lstrip(".")
+    if fmt not in SUPPORTED_AUDIO_FORMATS:
+        allowed = ", ".join(sorted(SUPPORTED_AUDIO_FORMATS))
+        raise HTTPException(status_code=400, detail=f"Unsupported output_format '{fmt}'. Use one of: {allowed}.")
+
+    if payload.start < 0:
+        raise HTTPException(status_code=400, detail="start must be greater than or equal to 0.")
+    if payload.end <= payload.start:
+        raise HTTPException(status_code=400, detail="end must be greater than start.")
+
+    media_path = _find_media_for_transcript(payload.transcript_id)
+
+    tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=f".{fmt}")
+    output_path = Path(tmp_out.name)
+    tmp_out.close()
+
+    codec_args = ["-c:a", "libmp3lame", "-b:a", "192k"] if fmt == "mp3" else ["-c:a", "pcm_s16le"]
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{payload.start}",
+        "-to",
+        f"{payload.end}",
+        "-i",
+        str(media_path),
+        "-vn",
+        "-ac",
+        "2",
+        "-ar",
+        "44100",
+        *codec_args,
+        str(output_path),
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        _cleanup_files([output_path])
+        detail = stderr.decode().strip() or "ffmpeg failed."
+        raise HTTPException(status_code=500, detail=detail)
+
+    background_tasks.add_task(_cleanup_files, [output_path])
+
+    media_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
+    suggested_name = f"{Path(payload.transcript_id).stem}_{payload.start:.2f}-{payload.end:.2f}.{fmt}"
+
+    return StreamingResponse(
+        output_path.open("rb"),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename=\"{suggested_name}\"'},
+        background=background_tasks,
+    )
 
 
 async def _room_socket_handler(websocket: WebSocket, room_id: str) -> None:
