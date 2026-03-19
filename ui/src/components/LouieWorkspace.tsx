@@ -45,7 +45,7 @@ const louieIcon = (
   </svg>
 );
 
-const LouieWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: string | null }) => {
+const LouieWorkspace = () => {
   const { data: transcripts, loading: loadingTranscripts, error: listError } = useTranscriptions();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("graph");
@@ -74,17 +74,6 @@ const LouieWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: string 
   const [prompt, setPrompt] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-
-  /* useEffect(() => {
-    if (!transcripts.length) return;
-    setSelectedId((prev) => {
-      if (prev && transcripts.some((t) => t.id === prev)) return prev;
-      const preferred =
-        initialTranscriptId &&
-        transcripts.find((t) => t.id === initialTranscriptId)?.id;
-      return preferred ?? transcripts[0].id;
-    });
-  }, [initialTranscriptId, transcripts]); */
 
   useEffect(() => {
     if (tab === "graph") {

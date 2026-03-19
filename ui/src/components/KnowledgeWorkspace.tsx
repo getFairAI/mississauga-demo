@@ -26,7 +26,7 @@ import { useTranscriptionData } from "../hooks/useTranscriptionData";
 import { useArgumentMap } from "../hooks/useArgumentMap";
 import { useAudioSnippets } from "../hooks/useAudioSnippets";
 
-const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: string | null }) => {
+const KnowledgeWorkspace = () => {
   const { data: transcripts, loading: loadingTranscripts, error: transcriptsError } =
     useTranscriptions();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -61,17 +61,6 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
   const handleChange = (_: SyntheticEvent, newValue: string) => {
     setValue(newValue);
   };
-
-  /* useEffect(() => {
-    if (!transcripts.length) return;
-    setSelectedId((prev) => {
-      if (prev && transcripts.some((t) => t.id === prev)) return prev;
-      const preferred =
-        initialTranscriptId &&
-        transcripts.find((t) => t.id === initialTranscriptId)?.id;
-      return preferred ?? transcripts[0].id;
-    });
-  }, [initialTranscriptId, transcripts]); */
 
   useEffect(() => {
     if (value === "1") {
