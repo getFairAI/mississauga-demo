@@ -135,7 +135,7 @@ const App = () => {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         {modeSwitcher}
-        <LouieWorkspace initialTranscriptId={routeState.transcriptId} />
+        <LouieWorkspace />
       </ThemeProvider>
     );
   }
@@ -198,7 +198,7 @@ const App = () => {
           {routeState.route === "chat" ? (
             <Chat messages={chatMessages} setMessages={setChatMessages} />
           ) : (
-            <KnowledgeWorkspace initialTranscriptId={routeState.transcriptId} />
+            <KnowledgeWorkspace />
           )}
         </Box>
       </Box>
