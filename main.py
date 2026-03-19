@@ -501,6 +501,7 @@ async def argument_map_job(
     room_id: str,
     transcript_id: str | None = None,
     save_path: Path | None = None,
+    chunk_char_limit: int = 10000,
 ) -> None:
     """Generate an argument map and stream progress/results."""
     await manager.ensure_room(room_id)
@@ -517,7 +518,18 @@ async def argument_map_job(
         await _broadcast("queued")
         await _broadcast("running")
 
-        result = await asyncio.to_thread(generate_argument_map, transcript_text)
+        chunks = _chunk_transcript_text(transcript_text, max_chars=chunk_char_limit) or [transcript_text]
+        total_chunks = len(chunks)
+        await _broadcast("chunking", {"total_chunks": total_chunks})
+
+        partials: list[dict] = []
+        for idx, chunk in enumerate(chunks, start=1):
+            chunk_result = await asyncio.to_thread(generate_argument_map_chunk, chunk, idx, total_chunks)
+            partials.append(chunk_result)
+            await _broadcast("chunk_complete", {"chunk": idx, "total_chunks": total_chunks})
+
+        full_word_count = len(transcript_text.split())
+        result = _merge_argument_maps(partials, full_word_count)
 
         if save_path is not None:
             # Persist pretty JSON for downstream consumption.
@@ -637,6 +649,142 @@ def generate_argument_map(transcript_text: str) -> dict:
         # Fall back to a minimal structure if parsing fails.
         payload = {"word_count": {}, "argument_map": {"agenda": [], "core_questions": []}, "raw": raw}
     return payload
+
+
+def generate_argument_map_chunk(transcript_text: str, chunk_index: int, total_chunks: int) -> dict:
+    """Chunk-aware argument map generation."""
+    transcript_text = (transcript_text or "").strip()
+    if not transcript_text:
+        return {}
+
+    desired_schema = {
+        "word_count": {
+            "raw": "integer words in this chunk",
+            "critical_words": ["key words"],
+            "compression_ratio": "float",
+        },
+        "argument_map": {
+            "agenda": [{"item": "agenda item", "presenter": "name or null"}],
+            "core_questions": [
+                {
+                    "question": "question text",
+                    "type": "open|closed",
+                    "unresolved": True,
+                    "options_or_claims": [{"label": "O1/S", "claim": "text", "support": ["quotes"]}],
+                    "evidence": [{"speaker": "name", "timestamp": "start-end", "quote": "exact quote"}],
+                }
+            ],
+        },
+    }
+
+    completion = sync_client.chat.completions.create(
+        model="gpt-4.1",
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Chunk {chunk_index} of {total_chunks}. Return JSON with this shape:\n"
+                    f"{json.dumps(desired_schema, indent=2)}\n"
+                    "Use only this chunk; keep quotes/timestamps local to it. If a field is unknown, use null or [].\n\n"
+                    f"Transcript chunk:\n{transcript_text}"
+                ),
+            },
+        ],
+        temperature=0.2,
+    )
+
+    raw = completion.choices[0].message.content
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        payload = {"word_count": {}, "argument_map": {"agenda": [], "core_questions": []}, "raw": raw}
+    return payload
+
+
+def _merge_argument_maps(partials: list[dict], full_word_count: int) -> dict:
+    """Merge chunk-level maps into a single coherent structure."""
+
+    def norm_question(text: str | None) -> str:
+        return (text or "").strip().lower()
+
+    agenda: list[dict] = []
+    seen_agenda: set[tuple] = set()
+    core_questions: list[dict] = []
+    seen_questions: dict[str, dict] = {}
+    critical_words: list[str] = []
+
+    for part in partials:
+        wc = (part.get("word_count") or {})
+        cwords = wc.get("critical_words") or []
+        if isinstance(cwords, list):
+            critical_words.extend([str(w).strip() for w in cwords if str(w).strip()])
+
+        amap = part.get("argument_map") or {}
+        for item in amap.get("agenda") or []:
+            key = (item.get("item") or "", item.get("presenter") or "")
+            if key in seen_agenda:
+                continue
+            seen_agenda.add(key)
+            agenda.append({"item": item.get("item"), "presenter": item.get("presenter")})
+
+        for cq in amap.get("core_questions") or []:
+            qtext = cq.get("question") or ""
+            qkey = norm_question(qtext)
+            existing = seen_questions.get(qkey)
+            if not existing:
+                # Initialize
+                merged = {
+                    "question": qtext,
+                    "type": cq.get("type") or "",
+                    "unresolved": bool(cq.get("unresolved")),
+                    "options_or_claims": [],
+                    "evidence": [],
+                }
+                seen_questions[qkey] = merged
+                core_questions.append(merged)
+                existing = merged
+
+            # merge flags/type lazily
+            if not existing.get("type") and cq.get("type"):
+                existing["type"] = cq.get("type")
+            if cq.get("unresolved"):
+                existing["unresolved"] = True
+
+            opts = cq.get("options_or_claims") or []
+            for opt in opts:
+                olabel = opt.get("label") or ""
+                oclaim = opt.get("claim") or ""
+                okey = f"{olabel.lower()}|{oclaim.lower()}"
+                if not any(f"{(o.get('label') or '').lower()}|{(o.get('claim') or '').lower()}" == okey for o in existing["options_or_claims"]):
+                    existing["options_or_claims"].append({"label": olabel, "claim": oclaim, "support": opt.get("support")})
+
+            evid = cq.get("evidence") or []
+            for ev in evid:
+                ekey = f"{(ev.get('timestamp') or '').lower()}|{(ev.get('quote') or '').lower()}|{(ev.get('speaker') or '').lower()}"
+                if not any(
+                    f"{(e.get('timestamp') or '').lower()}|{(e.get('quote') or '').lower()}|{(e.get('speaker') or '').lower()}" == ekey
+                    for e in existing["evidence"]
+                ):
+                    existing["evidence"].append(
+                        {"speaker": ev.get("speaker"), "timestamp": ev.get("timestamp"), "quote": ev.get("quote")}
+                    )
+
+    dedup_critical = list(dict.fromkeys([w for w in critical_words if w]))
+    compression_ratio = round(len(dedup_critical) / full_word_count, 3) if full_word_count else None
+
+    return {
+        "word_count": {
+            "raw": full_word_count,
+            "critical_words": dedup_critical,
+            "compression_ratio": compression_ratio,
+        },
+        "argument_map": {
+            "agenda": agenda,
+            "core_questions": core_questions,
+        },
+    }
 
 
 async def broadcast_json(room_id: str, payload: dict, sender: WebSocket | None = None) -> int:

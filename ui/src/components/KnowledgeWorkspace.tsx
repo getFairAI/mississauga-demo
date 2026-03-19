@@ -134,6 +134,13 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
   const [graphUrl, setGraphUrl] = useState<string>("");
   const [value, setValue] = useState("1");
 
+  const handleCoreQuestionNavigate = (negationUrl?: string) => {
+    const trimmed = negationUrl?.trim();
+    if (!trimmed) return;
+    setGraphUrl(trimmed);
+    setValue("2");
+  };
+
   const handleChange = (_: React.SyntheticEvent, newValue: string) => {
     setValue(newValue);
   };
@@ -597,16 +604,29 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                         {argumentMapData.argument_map.core_questions.map((cq, idx) => {
                           const key = `${selectedId ?? "q"}-${idx}`;
                           const range = parseTimestampRange(cq.evidence?.[0]?.timestamp as string);
+                          const hasNegationUrl = Boolean(cq.negation_url?.trim());
                           return (
                           <Paper
                             key={`${cq.question}-${idx}`}
                             variant="outlined"
-                            role="button"
-                            tabIndex={0}
+                            role={hasNegationUrl ? "button" : undefined}
+                            tabIndex={hasNegationUrl ? 0 : undefined}
+                            onClick={() => {
+                              if (!hasNegationUrl) return;
+                              handleCoreQuestionNavigate(cq.negation_url);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.target !== e.currentTarget) return;
+                              if (!hasNegationUrl) return;
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handleCoreQuestionNavigate(cq.negation_url);
+                              }
+                            }}
                             sx={{
                               p: 1.25,
                               borderRadius: 1.5,
-                              cursor: "pointer",
+                              cursor: hasNegationUrl ? "pointer" : "default",
                               "&:hover": { borderColor: "primary.main", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" },
                             }}
                           >
@@ -681,7 +701,11 @@ const KnowledgeWorkspace = ({ initialTranscriptId }: { initialTranscriptId?: str
                                         </Box>
                                       </Stack>
                                       {audioUrls[evKey] && (
-                                        <Box mt={1} width={'100%'}>
+                                        <Box
+                                          mt={1}
+                                          width={'100%'}
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
                                           <audio controls src={audioUrls[evKey]} style={{ width: "100%" }} />
                                         </Box>
                                       )}
