@@ -16,7 +16,7 @@ async def run():
         ("budget_2026_01_13_09_30",                  "budget_2026_01_13_09_30"),
         ("budget_2026_01_20_09_30",                  "budget_2026_01_20_09_30"),
         ("combat_discrimination_2026_02_11_06_47",   "combat_discrimination_2026_02_11_06_47"),
-        ("road_safety_comittee_01_27_09_30",         "road_safety_comittee_01_27_09_30"),
+        ("road_safety_comittee_2026_01_27_09_30",         "road_safety_comittee_2026_01_27_09_30"),
         ("road_safety_comittee_2026_03_24",          "road_safety_comittee_2026_03_24"),
     ]
 
