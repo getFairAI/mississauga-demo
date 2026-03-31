@@ -3,11 +3,13 @@ import MississaugaPage from "./pages/MississaugaPage";
 import HomePage from "./pages/HomePage";
 import TopicDetailPage from "./pages/TopicDetailPage";
 import SearchChatPage from "./pages/SearchChatPage";
+import TranscriptPage from "./pages/TranscriptPage";
 
 type Route =
   | { page: "mississauga" }
   | { page: "home" }
   | { page: "topic"; topicId: string }
+  | { page: "transcript"; transcriptId: string }
   | { page: "chat"; initialQuery?: string };
 
 const parseHash = (hash: string): Route => {
@@ -20,10 +22,13 @@ const parseHash = (hash: string): Route => {
     const topicId = path.slice("/topic/".length);
     return { page: "topic", topicId };
   }
+  if (path.startsWith("/transcript/")) {
+    const transcriptId = path.slice("/transcript/".length);
+    return { page: "transcript", transcriptId };
+  }
   if (path === "/chat") {
     return { page: "chat", initialQuery: params.get("q") ?? undefined };
   }
-  // Default: Mississauga entry page
   return { page: "mississauga" };
 };
 
@@ -52,6 +57,8 @@ const App = () => {
       return <HomePage />;
     case "topic":
       return <TopicDetailPage topicId={route.topicId} />;
+    case "transcript":
+      return <TranscriptPage transcriptId={route.transcriptId} />;
     case "chat":
       return <SearchChatPage initialQuery={route.initialQuery} />;
   }

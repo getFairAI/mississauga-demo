@@ -205,25 +205,114 @@ Cross-chunk guidance:
 - Never reference other chunks explicitly; analyze only the provided chunk text.
 """
 
-ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT = """
-You are an argument mapping assistant. Given a meeting transcript, produce the following two artifacts:
+ARGUMENT_MAP_EXTRACTION_PROMPT = """
+You are extracting raw evidence from ONE SECTION of a meeting transcript.
+Do NOT build an argument map. Do NOT synthesize or draw conclusions.
+Only extract what is explicitly present in this section.
 
-ARTIFACT 1: WORD COUNT
-	∙	Raw transcript word count
-	∙	Critical words (substantive claims, decisions, unresolved questions only)
-	∙	Compression ratio
+Return ONLY valid JSON matching this schema:
+{
+  "agenda_items": [{"item": "string", "presenter": "string or null"}],
+  "topics": ["short description of topic discussed"],
+  "positions": [
+    {"speaker": "string", "timestamp": "start-end", "claim": "one-sentence paraphrase", "quote": "exact words from transcript"}
+  ],
+  "questions": [
+    {"text": "string", "raised_by": "speaker name or null", "timestamp": "start-end or null", "answered": false}
+  ],
+  "decisions": [
+    {"text": "string", "timestamp": "start-end or null"}
+  ]
+}
 
-ARTIFACT 2: ARGUMENT MAP
-	1.	Before mapping anything, scan the entire transcript end to end and identify every agenda item and presenter. List them explicitly. This list is your completeness checklist.
-	2.	Identify all core questions being debated across the full transcript. Every agenda item and presenter must contribute at least one core question or node to the map. Do not finalize the map until you have verified this against your checklist.
-	3.	For each core question, determine the question type:
-	∙	Open question — multiple competing approaches or options exist → use Options structure (O1, O2, O3…)
-	∙	Closed question — yes/no, worth doing or not, important or not → use Claim structure directly (S, N, M on the claim itself)
-	5.	Flag Unresolved items — questions raised but never answered in the transcript
-	6.	Strip all small talk, pleasantries, and off-topic content
-	7.	Use exact quotes where possible, attributed to named speakers with timestamps
-	9.	Use only information explicitly stated in the transcript. Do not import external knowledge, prior research, or context from outside the meeting.
+Rules:
+- Quotes must be the speaker's exact words from the transcript.
+- Include timestamps in start-end format wherever available.
+- If nothing was found for a field, use an empty list [].
+- Do not invent, infer, or carry in knowledge from outside this section.
 """
+
+ARGUMENT_MAP_SYNTHESIS_PROMPT = """
+You are building a structured argument map from evidence extracted across all sections of a meeting transcript.
+The input is a JSON array where each element is the extraction from one transcript section.
+
+Your task:
+1. Review ALL sections as a complete meeting record.
+2. Identify every agenda item (deduplicate across sections).
+3. Identify the core questions being debated or decided across the full meeting.
+   - Group related positions, claims, and questions from different sections into unified core questions.
+   - Do NOT create separate questions for the same underlying issue just because it appeared in different sections.
+   - Every named agenda item and presenter should contribute to at least one core question.
+4. For each core question:
+   - type "open"  → multiple competing options exist → label options O1, O2, O3…
+   - type "closed" → yes/no or proceed/reject → label the claim S (support), N (negate), or M (modify)
+   - Mark unresolved = true if the meeting ended without a clear answer or decision.
+   - Collect the strongest supporting evidence (quotes + timestamps + speakers) from across all sections.
+5. Strip procedural chatter, pleasantries, and off-topic content.
+
+Return ONLY valid JSON:
+{
+  "word_count": {
+    "raw": <integer — sum of all section word counts>,
+    "critical_words": ["key substantive words or short phrases from across the meeting"],
+    "compression_ratio": <float>
+  },
+  "argument_map": {
+    "agenda": [{"item": "string", "presenter": "string or null"}],
+    "core_questions": [
+      {
+        "question": "string",
+        "type": "open|closed",
+        "unresolved": true,
+        "options_or_claims": [{"label": "O1|S|N|M", "claim": "string", "support": ["quote [timestamp]"]}],
+        "evidence": [{"speaker": "string", "timestamp": "string", "quote": "string"}]
+      }
+    ]
+  }
+}
+
+Use only data from the provided extractions. If a field has no data, use null or [].
+"""
+
+
+def _find_summary_versions(transcript_path: Path) -> list[dict]:
+    """Return all summary versions sorted ascending. Legacy _summary.txt is treated as v1."""
+    stem = transcript_path.stem
+    d = transcript_path.parent
+    versions: list[dict] = []
+    legacy = d / f"{stem}_summary.txt"
+    if legacy.exists():
+        versions.append({"version": 1, "file": legacy})
+    for p in d.glob(f"{stem}_summary_v*.txt"):
+        m = re.search(r"_summary_v(\d+)\.txt$", p.name)
+        if m:
+            versions.append({"version": int(m.group(1)), "file": p})
+    return sorted(versions, key=lambda x: x["version"])
+
+
+def _next_summary_version(transcript_path: Path) -> int:
+    vs = _find_summary_versions(transcript_path)
+    return max((v["version"] for v in vs), default=0) + 1
+
+
+def _find_argument_map_versions(transcript_path: Path) -> list[dict]:
+    """Return all argument map versions sorted ascending. Legacy _argument_map.json is treated as v1."""
+    stem = transcript_path.stem
+    d = transcript_path.parent
+    versions: list[dict] = []
+    legacy = d / f"{stem}_argument_map.json"
+    if legacy.exists():
+        versions.append({"version": 1, "file": legacy})
+    for p in d.glob(f"{stem}_argument_map_v*.json"):
+        m = re.search(r"_argument_map_v(\d+)\.json$", p.name)
+        if m:
+            versions.append({"version": int(m.group(1)), "file": p})
+    return sorted(versions, key=lambda x: x["version"])
+
+
+def _next_argument_map_version(transcript_path: Path) -> int:
+    vs = _find_argument_map_versions(transcript_path)
+    return max((v["version"] for v in vs), default=0) + 1
 
 
 def _resolve_transcript_path(transcript_id: str) -> Path:
@@ -316,6 +405,39 @@ def _normalize_actionable_payload(payload: dict) -> dict:
         )
 
     return {"highlights": [str(h).strip() for h in highlights if str(h).strip()], "actionable_topics": normalized}
+
+
+def _extract_json(raw: str) -> dict:
+    """Robustly parse JSON from LLM output that may be wrapped in markdown fences or prose."""
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    stripped = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped.strip())
+    stripped = stripped.strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(stripped)
+    except Exception:
+        pass
+
+    # Find first { ... } or [ ... ] block
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        start = stripped.find(start_char)
+        if start == -1:
+            continue
+        depth = 0
+        for i, ch in enumerate(stripped[start:], start=start):
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(stripped[start:i + 1])
+                    except Exception:
+                        break
+
+    raise ValueError(f"No valid JSON found in LLM output: {raw[:200]!r}")
 
 
 def _chunk_transcript_text(transcript_text: str, max_chars: int = 12000) -> List[str]:
@@ -459,26 +581,32 @@ async def summarize_transcript_job(
         total_chunks = max(1, len(chunks))
         await _broadcast("chunking", {"total_chunks": total_chunks})
 
-        aggregated_summary: str | None = None
+        # Collect independent per-chunk summaries, then consolidate.
+        chunk_summaries: list[str] = []
         for idx, chunk in enumerate(chunks or [transcript_text], start=1):
-            aggregated_summary = await asyncio.to_thread(
+            chunk_sum = await asyncio.to_thread(
                 generate_summary,
                 chunk,
                 idx,
                 total_chunks,
-                aggregated_summary,
+                None,  # no prior context — each chunk is summarized independently
             )
+            chunk_summaries.append(chunk_sum)
             await _broadcast(
                 "chunk_complete",
                 {
                     "chunk": idx,
                     "total_chunks": total_chunks,
-                    "summary": aggregated_summary,
+                    "summary": chunk_sum,
                     "transcript_id": transcript_id,
                 },
             )
 
-        final_summary = (aggregated_summary or "").strip()
+        if len(chunk_summaries) > 1:
+            from summarize_call import consolidate_summaries
+            final_summary = (await asyncio.to_thread(consolidate_summaries, chunk_summaries)).strip()
+        else:
+            final_summary = (chunk_summaries[0] if chunk_summaries else "").strip()
         response: dict[str, Any] = {
             "transcript_id": transcript_id,
             "summary": final_summary,
@@ -486,7 +614,8 @@ async def summarize_transcript_job(
 
         if save_summary and transcript_id:
             transcript_path = _resolve_transcript_path(transcript_id)
-            target_path = transcript_path.with_name(f"{transcript_path.stem}_summary.txt")
+            next_v = _next_summary_version(transcript_path)
+            target_path = transcript_path.with_name(f"{transcript_path.stem}_summary_v{next_v}.txt")
             await asyncio.to_thread(target_path.write_text, final_summary, "utf-8")
             response["summary_file"] = target_path.name
 
@@ -523,14 +652,17 @@ async def argument_map_job(
         total_chunks = len(chunks)
         await _broadcast("chunking", {"total_chunks": total_chunks})
 
-        partials: list[dict] = []
+        # Phase 1: extract raw evidence from each chunk independently.
+        extractions: list[dict] = []
         for idx, chunk in enumerate(chunks, start=1):
-            chunk_result = await asyncio.to_thread(generate_argument_map_chunk, chunk, idx, total_chunks)
-            partials.append(chunk_result)
-            await _broadcast("chunk_complete", {"chunk": idx, "total_chunks": total_chunks})
+            extraction = await asyncio.to_thread(extract_argument_evidence_chunk, chunk, idx, total_chunks)
+            extractions.append(extraction)
+            await _broadcast("chunk_complete", {"chunk": idx, "total_chunks": total_chunks, "phase": "extraction"})
 
+        # Phase 2: synthesize the full argument map from all extractions.
+        await _broadcast("synthesizing", {"phase": "synthesis", "total_chunks": total_chunks})
         full_word_count = len(transcript_text.split())
-        result = _merge_argument_maps(partials, full_word_count)
+        result = await asyncio.to_thread(synthesize_argument_map, extractions, full_word_count)
 
         if save_path is not None:
             # Persist pretty JSON for downstream consumption.
@@ -582,56 +714,60 @@ def generate_actionable_topics(
         json_mode=True,
     )
     try:
-        payload = json.loads(raw)
+        payload = _extract_json(raw)
     except Exception:
-        # Fallback: best-effort extraction by simple heuristics if JSON parsing fails.
         payload = {"highlights": [textwrap.shorten(transcript_text, width=180, placeholder="…")], "actionable_topics": []}
 
     return _normalize_actionable_payload(payload)
 
 
-def generate_argument_map(transcript_text: str) -> dict:
-    """Build an argument map and word stats for a full transcript."""
+def extract_argument_evidence_chunk(transcript_text: str, chunk_index: int, total_chunks: int) -> dict:
+    """Phase 1: extract raw evidence (topics, positions, questions) from one chunk.
+
+    Deliberately does NOT attempt to build an argument map — only collects facts
+    so that the synthesis step has a complete cross-chunk picture.
+    """
     transcript_text = (transcript_text or "").strip()
     if not transcript_text:
-        return {}
-
-    desired_schema = {
-        "word_count": {
-            "raw": "integer total words in transcript",
-            "critical_words": ["list of key claim/decision/question words or short phrases"],
-            "compression_ratio": "float between 0 and 1 or >0 showing compression vs raw",
-        },
-        "argument_map": {
-            "agenda": [
-                {"item": "agenda item", "presenter": "speaker name or null"},
-            ],
-            "core_questions": [
-                {
-                    "question": "core debated question",
-                    "type": "open|closed",
-                    "unresolved": True,
-                    "options_or_claims": [
-                        {"label": "O1/S/N/M", "claim": "text", "support": ["quotes with timestamps"]},
-                    ],
-                    "evidence": [
-                        {"speaker": "name", "timestamp": "start-end", "quote": "exact quote"},
-                    ],
-                }
-            ],
-        },
-    }
+        return {"agenda_items": [], "topics": [], "positions": [], "questions": [], "decisions": []}
 
     raw = ai_call(
         messages=[
-            {"role": "system", "content": ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT},
+            {"role": "system", "content": ARGUMENT_MAP_EXTRACTION_PROMPT},
             {
                 "role": "user",
                 "content": (
-                    "Return a compact JSON object following this shape:\n"
-                    f"{json.dumps(desired_schema, indent=2)}\n"
-                    "Use only data from the transcript. If a field is unknown, use null or an empty list.\n\n"
-                    f"Transcript:\n{transcript_text}"
+                    f"Section {chunk_index} of {total_chunks}.\n\n"
+                    f"Transcript section:\n{transcript_text}"
+                ),
+            },
+        ],
+        temperature=0.1,
+        json_mode=True,
+    )
+    try:
+        return _extract_json(raw)
+    except Exception:
+        return {"agenda_items": [], "topics": [], "positions": [], "questions": [], "decisions": []}
+
+
+def synthesize_argument_map(extractions: list[dict], full_word_count: int) -> dict:
+    """Phase 2: synthesize a full argument map from all per-chunk extractions.
+
+    Receives the complete evidence picture and produces the final structured map.
+    """
+    if not extractions:
+        return {"word_count": {"raw": full_word_count}, "argument_map": {"agenda": [], "core_questions": []}}
+
+    raw = ai_call(
+        messages=[
+            {"role": "system", "content": ARGUMENT_MAP_SYNTHESIS_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Total transcript word count: {full_word_count}\n\n"
+                    f"Per-section extractions ({len(extractions)} sections):\n"
+                    f"{json.dumps(extractions, indent=2)}"
                 ),
             },
         ],
@@ -639,144 +775,9 @@ def generate_argument_map(transcript_text: str) -> dict:
         json_mode=True,
     )
     try:
-        payload = json.loads(raw)
+        return _extract_json(raw)
     except Exception:
-        # Fall back to a minimal structure if parsing fails.
-        payload = {"word_count": {}, "argument_map": {"agenda": [], "core_questions": []}, "raw": raw}
-    return payload
-
-
-def generate_argument_map_chunk(transcript_text: str, chunk_index: int, total_chunks: int) -> dict:
-    """Chunk-aware argument map generation."""
-    transcript_text = (transcript_text or "").strip()
-    if not transcript_text:
-        return {}
-
-    desired_schema = {
-        "word_count": {
-            "raw": "integer words in this chunk",
-            "critical_words": ["key words"],
-            "compression_ratio": "float",
-        },
-        "argument_map": {
-            "agenda": [{"item": "agenda item", "presenter": "name or null"}],
-            "core_questions": [
-                {
-                    "question": "question text",
-                    "type": "open|closed",
-                    "unresolved": True,
-                    "options_or_claims": [{"label": "O1/S", "claim": "text", "support": ["quotes"]}],
-                    "evidence": [{"speaker": "name", "timestamp": "start-end", "quote": "exact quote"}],
-                }
-            ],
-        },
-    }
-
-    raw = ai_call(
-        messages=[
-            {"role": "system", "content": ARGUMENT_MAP_QUESTION_EXTRACTION_ASSISTANT_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"Chunk {chunk_index} of {total_chunks}. Return JSON with this shape:\n"
-                    f"{json.dumps(desired_schema, indent=2)}\n"
-                    "Use only this chunk; keep quotes/timestamps local to it. If a field is unknown, use null or [].\n\n"
-                    f"Transcript chunk:\n{transcript_text}"
-                ),
-            },
-        ],
-        temperature=0.2,
-        json_mode=True,
-    )
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        payload = {"word_count": {}, "argument_map": {"agenda": [], "core_questions": []}, "raw": raw}
-    return payload
-
-
-def _merge_argument_maps(partials: list[dict], full_word_count: int) -> dict:
-    """Merge chunk-level maps into a single coherent structure."""
-
-    def norm_question(text: str | None) -> str:
-        return (text or "").strip().lower()
-
-    agenda: list[dict] = []
-    seen_agenda: set[tuple] = set()
-    core_questions: list[dict] = []
-    seen_questions: dict[str, dict] = {}
-    critical_words: list[str] = []
-
-    for part in partials:
-        wc = (part.get("word_count") or {})
-        cwords = wc.get("critical_words") or []
-        if isinstance(cwords, list):
-            critical_words.extend([str(w).strip() for w in cwords if str(w).strip()])
-
-        amap = part.get("argument_map") or {}
-        for item in amap.get("agenda") or []:
-            key = (item.get("item") or "", item.get("presenter") or "")
-            if key in seen_agenda:
-                continue
-            seen_agenda.add(key)
-            agenda.append({"item": item.get("item"), "presenter": item.get("presenter")})
-
-        for cq in amap.get("core_questions") or []:
-            qtext = cq.get("question") or ""
-            qkey = norm_question(qtext)
-            existing = seen_questions.get(qkey)
-            if not existing:
-                # Initialize
-                merged = {
-                    "question": qtext,
-                    "type": cq.get("type") or "",
-                    "unresolved": bool(cq.get("unresolved")),
-                    "options_or_claims": [],
-                    "evidence": [],
-                }
-                seen_questions[qkey] = merged
-                core_questions.append(merged)
-                existing = merged
-
-            # merge flags/type lazily
-            if not existing.get("type") and cq.get("type"):
-                existing["type"] = cq.get("type")
-            if cq.get("unresolved"):
-                existing["unresolved"] = True
-
-            opts = cq.get("options_or_claims") or []
-            for opt in opts:
-                olabel = opt.get("label") or ""
-                oclaim = opt.get("claim") or ""
-                okey = f"{olabel.lower()}|{oclaim.lower()}"
-                if not any(f"{(o.get('label') or '').lower()}|{(o.get('claim') or '').lower()}" == okey for o in existing["options_or_claims"]):
-                    existing["options_or_claims"].append({"label": olabel, "claim": oclaim, "support": opt.get("support")})
-
-            evid = cq.get("evidence") or []
-            for ev in evid:
-                ekey = f"{(ev.get('timestamp') or '').lower()}|{(ev.get('quote') or '').lower()}|{(ev.get('speaker') or '').lower()}"
-                if not any(
-                    f"{(e.get('timestamp') or '').lower()}|{(e.get('quote') or '').lower()}|{(e.get('speaker') or '').lower()}" == ekey
-                    for e in existing["evidence"]
-                ):
-                    existing["evidence"].append(
-                        {"speaker": ev.get("speaker"), "timestamp": ev.get("timestamp"), "quote": ev.get("quote")}
-                    )
-
-    dedup_critical = list(dict.fromkeys([w for w in critical_words if w]))
-    compression_ratio = round(len(dedup_critical) / full_word_count, 3) if full_word_count else None
-
-    return {
-        "word_count": {
-            "raw": full_word_count,
-            "critical_words": dedup_critical,
-            "compression_ratio": compression_ratio,
-        },
-        "argument_map": {
-            "agenda": agenda,
-            "core_questions": core_questions,
-        },
-    }
+        return {"word_count": {"raw": full_word_count}, "argument_map": {"agenda": [], "core_questions": []}}
 
 
 async def broadcast_json(room_id: str, payload: dict, sender: WebSocket | None = None) -> int:
@@ -1060,7 +1061,7 @@ async def list_transcriptions() -> dict:
     if TRANSCRIPTS_DIR.exists():
         for path in sorted(TRANSCRIPTS_DIR.glob("*.txt")):
             # Skip generated summary files (e.g., foo_summary.txt) to avoid double-counting.
-            if path.stem.endswith("_summary") or path.stem.find("_part") != -1:
+            if re.search(r"_summary(_v\d+)?$", path.stem) or path.stem.find("_part") != -1:
                 continue
             lines, topic = parse_transcript_file(path)
             duration = lines[-1].end if lines else None
@@ -1217,14 +1218,8 @@ async def build_argument_map(payload: ArgumentMapRequest) -> dict:
         transcript_path = _resolve_transcript_path(payload.transcript_id)
         transcript_text = transcript_path.read_text(encoding="utf-8")
         chosen_id = transcript_path.name
-        save_path = transcript_path.with_name(f"{transcript_path.stem}_argument_map.json")
-        # Short-circuit if already generated for this transcript.
-        if save_path.exists():
-            return {
-                "status": "already_exists",
-                "transcript_id": chosen_id,
-                "argument_map_file": save_path.name,
-            }
+        next_v = _next_argument_map_version(transcript_path)
+        save_path = transcript_path.with_name(f"{transcript_path.stem}_argument_map_v{next_v}.json")
     else:
         transcript_text = payload.transcript_text or ""
         save_path = TRANSCRIPTS_DIR / f"argument_map_{uuid.uuid4().hex}.json"
@@ -1254,50 +1249,40 @@ async def build_argument_map(payload: ArgumentMapRequest) -> dict:
 
 @app.get("/transcriptions/{transcript_id}/argument-map")
 async def get_argument_map(transcript_id: str) -> dict:
-    """Return a previously saved argument map for a transcript."""
+    """Return all saved argument map versions for a transcript."""
     transcript_path = _resolve_transcript_path(transcript_id)
-    argument_map_path = transcript_path.with_name(f"{transcript_path.stem}_argument_map.json")
-
-    if not argument_map_path.exists():
-        raise HTTPException(status_code=404, detail="Argument map not found for this transcript.")
-
-    try:
-        argument_map = json.loads(argument_map_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive path
-        raise HTTPException(status_code=500, detail=f"Failed to read argument map: {exc}") from exc
-
-    return {
-        "transcript_id": transcript_path.name,
-        "argument_map_file": argument_map_path.name,
-        "argument_map": argument_map,
-    }
+    entries = _find_argument_map_versions(transcript_path)
+    if not entries:
+        raise HTTPException(status_code=404, detail="No argument maps found for this transcript.")
+    versions = []
+    for entry in entries:
+        try:
+            data = json.loads(entry["file"].read_text(encoding="utf-8"))
+            versions.append({"version": entry["version"], "argument_map": data, "argument_map_file": entry["file"].name})
+        except Exception:
+            pass
+    if not versions:
+        raise HTTPException(status_code=404, detail="No argument maps found for this transcript.")
+    return {"transcript_id": transcript_path.name, "versions": versions}
 
 
 @app.get("/transcriptions/{transcript_id}/summary")
 async def get_transcription_summary(transcript_id: str) -> dict:
-    """Return a previously saved summary for a transcript.
-
-    Summaries are expected alongside the transcript files with the pattern
-    `<transcript_stem>_summary.txt`. If no summary file exists, a 404 is
-    returned to keep error semantics predictable for clients.
-    """
-
+    """Return all saved summary versions for a transcript."""
     transcript_path = _resolve_transcript_path(transcript_id)
-    summary_path = transcript_path.with_name(f"{transcript_path.stem}_summary.txt")
-
-    if not summary_path.exists():
-        raise HTTPException(status_code=404, detail="Summary not found for this transcript.")
-
-    try:
-        summary_text = summary_path.read_text(encoding="utf-8")
-    except Exception as exc:  # pragma: no cover - defensive path
-        raise HTTPException(status_code=500, detail=f"Failed to read summary: {exc}") from exc
-
-    return {
-        "transcript_id": transcript_path.name,
-        "summary_file": summary_path.name,
-        "summary": summary_text,
-    }
+    entries = _find_summary_versions(transcript_path)
+    if not entries:
+        raise HTTPException(status_code=404, detail="No summaries found for this transcript.")
+    versions = []
+    for entry in entries:
+        try:
+            text = entry["file"].read_text(encoding="utf-8")
+            versions.append({"version": entry["version"], "summary": text, "summary_file": entry["file"].name})
+        except Exception:
+            pass
+    if not versions:
+        raise HTTPException(status_code=404, detail="No summaries found for this transcript.")
+    return {"transcript_id": transcript_path.name, "versions": versions}
 
 
 @app.post("/openai_transcribe")

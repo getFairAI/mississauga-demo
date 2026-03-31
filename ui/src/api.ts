@@ -57,6 +57,20 @@ export type SummaryResponse = {
   bullets?: string[];
 };
 
+export type SummaryVersion = {
+  version: number;
+  summary: string;
+  summary_file?: string;
+  headline?: string | null;
+  bullet_points?: string[];
+  bullets?: string[];
+};
+
+export type SummaryListResponse = {
+  transcript_id: string;
+  versions: SummaryVersion[];
+};
+
 export type SummaryStartResponse = {
   room_id: string;
   status: string;
@@ -100,6 +114,17 @@ export type ArgumentMapResponse = {
   transcript_id?: string;
   argument_map_file?: string;
   argument_map: ArgumentMapPayload;
+};
+
+export type ArgumentMapVersion = {
+  version: number;
+  argument_map: ArgumentMapPayload;
+  argument_map_file?: string;
+};
+
+export type ArgumentMapListResponse = {
+  transcript_id: string;
+  versions: ArgumentMapVersion[];
 };
 
 export type ArgumentMapStartResponse = {
@@ -175,15 +200,28 @@ export async function summarizeTranscript(body: {
   return res.json() as Promise<SummaryStartResponse>;
 }
 
-export async function fetchSummary(transcriptId: string): Promise<SummaryResponse | null> {
+export async function fetchSummaries(transcriptId: string): Promise<SummaryListResponse | null> {
   const res = await fetch(
     `${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}/summary`,
   );
   if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<SummaryResponse>;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<SummaryListResponse>;
+}
+
+/** Backward-compat wrapper — returns the latest version in the old format. */
+export async function fetchSummary(transcriptId: string): Promise<SummaryResponse | null> {
+  const result = await fetchSummaries(transcriptId);
+  if (!result || result.versions.length === 0) return null;
+  const latest = result.versions[result.versions.length - 1];
+  return {
+    transcript_id: result.transcript_id,
+    summary_file: latest.summary_file,
+    summary: latest.summary,
+    headline: latest.headline,
+    bullet_points: latest.bullet_points,
+    bullets: latest.bullets,
+  };
 }
 
 export async function analyzeTranscript(body: { transcript_id?: string }) {
@@ -210,15 +248,25 @@ export async function buildArgumentMap(body: { transcript_id?: string }) {
   return res.json() as Promise<ArgumentMapStartResponse>;
 }
 
-export async function fetchArgumentMap(transcriptId: string): Promise<ArgumentMapResponse | null> {
+export async function fetchArgumentMaps(transcriptId: string): Promise<ArgumentMapListResponse | null> {
   const res = await fetch(
     `${API_BASE}/transcriptions/${encodeURIComponent(transcriptId)}/argument-map`,
   );
   if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<ArgumentMapResponse>;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<ArgumentMapListResponse>;
+}
+
+/** Backward-compat wrapper — returns the latest version in the old format. */
+export async function fetchArgumentMap(transcriptId: string): Promise<ArgumentMapResponse | null> {
+  const result = await fetchArgumentMaps(transcriptId);
+  if (!result || result.versions.length === 0) return null;
+  const latest = result.versions[result.versions.length - 1];
+  return {
+    transcript_id: result.transcript_id,
+    argument_map_file: latest.argument_map_file,
+    argument_map: latest.argument_map,
+  };
 }
 
 export async function sliceAudioSegment(params: {

@@ -48,6 +48,30 @@ def generate_summary(
     )
 
 
+def consolidate_summaries(chunk_summaries: list[str]) -> str:
+    """Merge independent per-chunk summaries into one comprehensive summary."""
+    combined = "\n\n---\n\n".join(
+        f"Section {i + 1}:\n{s}" for i, s in enumerate(chunk_summaries)
+    )
+    system_msg = (
+        "You are given summaries from different sections of a single meeting transcript.\n"
+        "Merge them into ONE comprehensive, non-repetitive summary.\n"
+        "- Keep all unique facts, decisions, action items, participants, dates, and amounts.\n"
+        "- Remove exact or near-duplicate points; combine related items into single statements.\n"
+        "- Organize by theme (not by section order).\n"
+        "- Aim for 10-16 concise bullet points or short paragraphs.\n"
+        "- Write in clear, professional English.\n"
+        "- Do NOT add information not present in the input summaries.\n"
+    )
+    return ai_call(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": f"Section summaries to consolidate:\n\n{combined}"},
+        ],
+        temperature=0.2,
+    )
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python summarize_call.py path/to/transcript.txt")
