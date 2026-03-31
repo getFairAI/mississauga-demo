@@ -1,23 +1,10 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 import { navigate } from "../App";
-import { fetchSummary, type SummaryResponse } from "../api";
-import { useTranscriptions } from "../hooks/useTranscriptions";
-import { formatTranscriptTitle } from "../utils/formatTranscriptTitle";
+import { feedItems } from "../data/mockData";
 
-// Parse a timestamp embedded in transcript titles like _2024_12_08_18_30
-const parseTranscriptDate = (title?: string | null) => {
-  if (!title) return 0;
-  const match = title.match(/_(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{1,2})$/);
-  if (match) {
-    const [, year, month, day, hour, minute] = match;
-    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
-  }
-  const parsed = Date.parse(title);
-  return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-const trimText = (text: string, max = 260) =>
-  text.length > max ? `${text.slice(0, max).trim()}…` : text;
+// Sort feed items newest-first by date
+const parseDate = (d: string) => new Date(d).getTime();
+const sortedFeedItems = [...feedItems].sort((a, b) => parseDate(b.date) - parseDate(a.date));
 
 const SUGGESTIONS = [
   "When have councillors mentioned institutional memory or forgetting things?",
@@ -31,37 +18,6 @@ const HomePage = () => {
   const [searchExpanded, setSearchExpanded] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const overlayInputRef = useRef<HTMLInputElement>(null);
-  const { data: transcripts, loading: loadingTranscripts, error: listError } = useTranscriptions();
-  const [summaries, setSummaries] = useState<Record<string, SummaryResponse | null>>({});
-  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
-
-  // Prefetch summaries for the first few transcripts so the feed has real content
-  useEffect(() => {
-    let cancelled = false;
-    const targets = transcripts.slice(0, 6);
-
-    targets.forEach(async (item) => {
-      if (summaries[item.id] !== undefined || summaryErrors[item.id]) return;
-      try {
-        const summary = await fetchSummary(item.id);
-        if (cancelled) return;
-        setSummaries((prev) => ({ ...prev, [item.id]: summary }));
-      } catch (err) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : "Summary unavailable.";
-        setSummaryErrors((prev) => ({ ...prev, [item.id]: message }));
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [summaries, summaryErrors, transcripts]);
-
-  const sortedTranscripts = useMemo(
-    () => [...transcripts].sort((a, b) => parseTranscriptDate(b.title) - parseTranscriptDate(a.title)),
-    [transcripts],
-  );
 
   // When overlay opens, focus the overlay input and sync value
   useEffect(() => {
@@ -205,85 +161,60 @@ const HomePage = () => {
 
       {/* Feed */}
       <div className="feed-container">
-        {loadingTranscripts && (
-          <div className="msga-callout" style={{ marginBottom: "1rem" }}>
-            Loading the latest meetings…
-          </div>
-        )}
+        {sortedFeedItems.map((item) => (
+          <article key={item.id} className="feed-item">
+            {/* Committee + date */}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <span className="feed-item-committee">
+                {item.committee.name}
+              </span>
+              <span className="feed-item-date">{item.date}</span>
+            </div>
 
-        {listError && (
-          <div
-            className="msga-callout"
-            style={{ marginBottom: "1rem", color: "#b00020", borderColor: "#b00020" }}
-          >
-            {listError}
-          </div>
-        )}
+            {/* Headline */}
+            <h2
+              className="feed-item-headline"
+              onClick={() => navigate(`/topic/${item.id}`)}
+            >
+              {item.headline}
+            </h2>
 
-        {!loadingTranscripts && !listError && sortedTranscripts.length === 0 && (
-          <div className="msga-callout" style={{ marginBottom: "1rem" }}>
-            No transcripts available yet. Try uploading one or refresh.
-          </div>
-        )}
+            {/* Brief */}
+            <p className="feed-item-brief">{item.brief}</p>
 
-        {sortedTranscripts.map((item) => {
-          const summary = summaries[item.id];
-          const summaryError = summaryErrors[item.id];
-          const headline = formatTranscriptTitle(item.title) || item.title;
-          const dateLabel = (() => {
-            const ts = parseTranscriptDate(item.title);
-            if (!ts) return "";
-            return new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            }).format(new Date(ts));
-          })();
-          const bullets = summary?.bullet_points ?? summary?.bullets ?? [];
-          const brief = summaryError
-            ? `Summary unavailable: ${summaryError}`
-            : summary?.headline || summary?.summary || "Summary will appear once generated.";
-
-          return (
-            <article key={item.id} className="feed-item">
-              {/* Committee + date */}
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <span className="feed-item-committee">
-                  {item.topic || "Council"}
-                </span>
-                <span className="feed-item-date">{dateLabel}</span>
+            {/* Deliberative question */}
+            {item.deliberativeQuestion && (
+              <div
+                className="feed-item-question"
+                onClick={() => navigate(`/topic/${item.id}`)}
+              >
+                {item.deliberativeQuestion}
               </div>
+            )}
 
-              {/* Headline */}
-              <h2
-                className="feed-item-headline"
-                onClick={() => navigate(`/topic/${item.id}`)}
-              >
-                {headline}
-              </h2>
+            {/* Key quotes */}
+            {item.keyQuotes?.slice(0, 1).map((kq, idx) => (
+              <div key={idx} className="feed-item-quote">
+                <div className="feed-item-quote-speaker">
+                  {kq.speaker}
+                  {kq.role ? `, ${kq.role}` : ""}
+                </div>
+                <div className="feed-item-quote-text">"{kq.quote}"</div>
+              </div>
+            ))}
 
-              {/* Brief */}
-              <p className="feed-item-brief">{trimText(brief)}</p>
-
-              {/* Bullet points if available */}
-              {bullets.length > 0 && (
-                <ul className="feed-item-bullets">
-                  {bullets.slice(0, 3).map((bp, idx) => (
-                    <li key={idx}>{bp}</li>
-                  ))}
-                </ul>
-              )}
-
-              <button
-                className="feed-item-audio-btn"
-                style={{ marginTop: "0.5rem" }}
-                onClick={() => navigate(`/topic/${item.id}`)}
-              >
-                View details
+            {/* Audio button (decorative) */}
+            {item.hasAudio && (
+              <button className="feed-item-audio-btn">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="6.5" stroke="currentColor" />
+                  <path d="M5.5 4.5L9.5 7L5.5 9.5V4.5Z" fill="currentColor" />
+                </svg>
+                Listen to excerpt
               </button>
-            </article>
-          );
-        })}
+            )}
+          </article>
+        ))}
       </div>
 
       {/* Footer */}

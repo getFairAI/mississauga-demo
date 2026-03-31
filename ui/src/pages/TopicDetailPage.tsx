@@ -1,10 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { JSX } from "react";
+import { useState, useRef, useEffect } from "react";
 import { navigate } from "../App";
-import { askAssistant, fetchSummary, type SummaryResponse } from "../api";
-import { useTranscriptions } from "../hooks/useTranscriptions";
-import { useTranscriptionData } from "../hooks/useTranscriptionData";
-import { formatTranscriptTitle } from "../utils/formatTranscriptTitle";
+import { getFeedItem, feedItems, type FeedItem } from "../data/mockData";
 
 // Simple markdown-ish renderer for chat messages
 const renderChatMarkdown = (text: string) => {
@@ -66,112 +62,92 @@ type ChatMessage = {
   text: string;
 };
 
+const buildInitialSummary = (item: FeedItem): string => {
+  let summary = `**Summary of deliberation: ${item.headline}**\n\n`;
+  summary += `${item.description}\n\n`;
+
+  if (item.deliberativeQuestion) {
+    summary += `The central question before the committee: *${item.deliberativeQuestion}*\n\n`;
+  }
+
+  if (item.keyQuotes && item.keyQuotes.length > 0) {
+    summary += `### Key statements\n\n`;
+    for (const kq of item.keyQuotes) {
+      summary += `**${kq.speaker}**${kq.role ? ` (${kq.role})` : ""}:\n`;
+      summary += `> *"${kq.quote}"*\n\n`;
+    }
+  }
+
+  if (item.negationGameUrl) {
+    summary += `The structured deliberation board below maps out the arguments, counter-arguments, and evidence on this topic. You can explore the full argument map or ask me questions about specific points.`;
+  } else {
+    summary += `This topic does not yet have a structured deliberation board. You can ask me questions about the discussion, key arguments, and related transcript excerpts.`;
+  }
+
+  return summary;
+};
+
 const TopicDetailPage = ({ topicId }: { topicId: string }) => {
-  const { data: transcripts, loading: loadingList, error: listError } = useTranscriptions();
-  const transcriptMeta = useMemo(() => transcripts.find((t) => t.id === topicId) ?? null, [transcripts, topicId]);
-  const { data: transcript, loading: loadingTranscript, error: transcriptError } = useTranscriptionData(topicId, { enabled: Boolean(topicId) });
-
-  const [summary, setSummary] = useState<SummaryResponse | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
-
+  const item = getFeedItem(topicId);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Scroll to top and build initial summary when topic loads
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSummary(null);
-    setSummaryError(null);
-    if (!topicId) return;
-    setSummaryLoading(true);
-    fetchSummary(topicId)
-      .then((res) => {
-        if (cancelled) return;
-        setSummary(res);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : "Unable to load summary.";
-        setSummaryError(message);
-      })
-      .finally(() => {
-        if (!cancelled) setSummaryLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [topicId]);
-
-  useEffect(() => {
-    if (chatMessages.length > 0) return;
-    if (summary) {
+    window.scrollTo(0, 0);
+    document.querySelector('.topic-main')?.scrollTo(0, 0);
+    if (item) {
       setChatMessages([
         {
           id: "summary",
           role: "assistant",
-          text:
-            summary.headline || summary.summary
-              ? `**Summary**\n\n${summary.headline ? `${summary.headline}\n\n` : ""}${summary.summary || ""}`
-              : "No summary available yet.",
-        },
-      ]);
-      return;
-    }
-    if (summaryError) {
-      setChatMessages([
-        {
-          id: "summary-error",
-          role: "assistant",
-          text: `Summary not available: ${summaryError}`,
+          text: buildInitialSummary(item),
         },
       ]);
     }
-  }, [chatMessages.length, summary, summaryError]);
+  }, [topicId]);
 
-  const handleChatSend = async () => {
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    setChatInput("");
-    setChatMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", text }]);
-    setChatLoading(true);
-
-    try {
-      const res = await askAssistant(text);
-      const answer =
-        res.type === "chart"
-          ? "The assistant returned a chart response for this question. (Charts are not rendered here yet.)"
-          : res.answer || "No answer returned.";
-      setChatMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: answer }]);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to contact assistant.";
-      setChatMessages((prev) => [
-        ...prev,
-        { id: `e-${Date.now()}`, role: "assistant", text: `Sorry, I couldn't fetch an answer. ${message}` },
-      ]);
-    } finally {
-      setChatLoading(false);
+  useEffect(() => {
+    // Scroll only the chat container, not the whole page
+    const chatContainer = messagesEndRef.current?.closest('.chat-messages');
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
     }
-  };
+  }, [chatMessages]);
 
-  const dateLabel = transcriptMeta ? formatTranscriptTitle(transcriptMeta.title) : "";
-
-  if (!loadingList && !transcriptMeta && !listError) {
+  if (!item) {
     return (
       <div style={{ padding: "2rem", textAlign: "center" }}>
-        <p>Transcript not found.</p>
+        <p>Topic not found.</p>
         <a href="#/home" onClick={(e) => { e.preventDefault(); navigate("/home"); }}>
-          {"<- Back to feed"}
+          ← Back to feed
         </a>
       </div>
     );
   }
+
+  const otherQuestions = feedItems.filter(
+    (fi) =>
+      fi.id !== item.id &&
+      fi.committee.id === item.committee.id &&
+      fi.deliberativeQuestion,
+  );
+
+  const handleChatSend = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    setChatInput("");
+    setChatMessages((prev) => [
+      ...prev,
+      { id: `u-${Date.now()}`, role: "user", text },
+      {
+        id: `a-${Date.now()}`,
+        role: "assistant",
+        text: `Thank you for your question about "${text}". In the demo, this response would be generated by AI using the transcript data and deliberation records for this topic. Louis will connect the real AI backend here.`,
+      },
+    ]);
+  };
 
   return (
     <div style={{ height: "100vh", overflow: "hidden", background: "var(--msga-bg)" }}>
@@ -206,75 +182,99 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
             navigate("/home");
           }}
         >
-          {"<- Home"}
+          ← Home
         </a>
-        {transcriptMeta && (
-          <div className="msga-nav-item active" style={{ fontSize: "0.75rem" }}>
-            {transcriptMeta.topic || "Council"}
-          </div>
-        )}
+        <div className="msga-nav-item active" style={{ fontSize: "0.75rem" }}>
+          {item.committee.name}
+        </div>
       </nav>
 
       {/* Main layout */}
       <div className="topic-detail-layout">
-        {/* Left: Topic content */}
+        {/* Left: Topic content + Negation Game */}
         <div className="topic-main">
-          {listError && (
-            <div className="msga-callout" style={{ color: "#b00020", borderColor: "#b00020" }}>
-              {listError}
-            </div>
-          )}
+          <div className="topic-meta">
+            <span className="topic-committee-tag">{item.committee.name}</span>
+            <span className="topic-date">{item.date}</span>
+          </div>
 
-          {transcriptMeta && (
-            <div className="topic-meta">
-              <span className="topic-committee-tag">{transcriptMeta.topic || "Council"}</span>
-              <span className="topic-date">{dateLabel}</span>
-            </div>
-          )}
+          <h1 className="topic-title">{item.headline}</h1>
+          <p className="topic-description">{item.description}</p>
 
-          <h1 className="topic-title">{transcriptMeta?.title || "Meeting transcript"}</h1>
-
-          {summaryLoading && <p style={{ color: "#666" }}>Loading summary…</p>}
-          {summaryError && (
-            <div className="msga-callout" style={{ color: "#b00020", borderColor: "#b00020" }}>
-              {summaryError}
-            </div>
-          )}
-
-          {summary?.headline && <p className="topic-description">{summary.headline}</p>}
-          {summary?.summary && (
-            <p className="topic-description" style={{ lineHeight: 1.6 }}>
-              {summary.summary}
-            </p>
-          )}
-
-          {(summary?.bullet_points?.length || summary?.bullets?.length) && (
+          {/* Key quotes */}
+          {item.keyQuotes && item.keyQuotes.length > 0 && (
             <>
-              <div className="topic-section-header">Key points</div>
-              <ul className="topic-other-questions">
-                {(summary.bullet_points || summary.bullets || []).slice(0, 6).map((bp, idx) => (
-                  <li key={idx}>{bp}</li>
-                ))}
-              </ul>
+              <div className="topic-section-header">Key statements</div>
+              {item.keyQuotes.map((kq, idx) => (
+                <div key={idx} className="feed-item-quote" style={{ marginBottom: "0.75rem" }}>
+                  <div className="feed-item-quote-speaker">
+                    {kq.speaker}
+                    {kq.role ? `, ${kq.role}` : ""}
+                  </div>
+                  <div className="feed-item-quote-text">"{kq.quote}"</div>
+                  {item.hasAudio && (
+                    <button className="feed-item-audio-btn" style={{ marginTop: "0.35rem" }}>
+                      <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                        <circle cx="7" cy="7" r="6.5" stroke="currentColor" />
+                        <path d="M5.5 4.5L9.5 7L5.5 9.5V4.5Z" fill="currentColor" />
+                      </svg>
+                      Listen
+                    </button>
+                  )}
+                </div>
+              ))}
             </>
           )}
 
-          <div className="topic-section-header">Transcript</div>
-          {loadingTranscript && <p style={{ color: "#666" }}>Loading transcript…</p>}
-          {transcriptError && (
-            <div className="msga-callout" style={{ color: "#b00020", borderColor: "#b00020" }}>
-              {transcriptError}
-            </div>
+          {/* Negation Game embed */}
+          {item.negationGameUrl ? (
+            <>
+              <div className="topic-section-header">Deliberation Map</div>
+              <div className="topic-negation-frame">
+                <iframe
+                  src={item.negationGameUrl}
+                  title="Negation Game — Deliberation Map"
+                  allow="clipboard-write"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="topic-section-header">Discussion Summary</div>
+              <div
+                className="msga-callout"
+                style={{ fontSize: "0.85rem", lineHeight: 1.6 }}
+              >
+                A structured deliberation map has not yet been generated for this
+                topic. The key arguments and evidence from council transcripts are
+                summarized in the chat panel. As more transcript data becomes
+                available, a full argument map will be generated automatically.
+              </div>
+            </>
           )}
-          {transcript && (
-            <div className="topic-transcript">
-              {transcript.lines.slice(0, 80).map((line) => (
-                <div key={line.index} className="transcript-line">
-                  <span className="transcript-speaker">{line.speaker}</span>
-                  <span className="transcript-text">{line.text}</span>
-                </div>
-              ))}
-            </div>
+
+          {/* Other questions from same committee */}
+          {otherQuestions.length > 0 && (
+            <>
+              <div className="topic-section-header">
+                Other questions — {item.committee.name}
+              </div>
+              <ul className="topic-other-questions">
+                {otherQuestions.map((oq) => (
+                  <li key={oq.id}>
+                    <a
+                      href={`#/topic/${oq.id}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigate(`/topic/${oq.id}`);
+                      }}
+                    >
+                      {oq.deliberativeQuestion || oq.headline}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
 
@@ -297,10 +297,11 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
           <div className="chat-messages">
             {chatMessages.map((msg) => (
               <div key={msg.id} className={`chat-msg ${msg.role}`}>
-                {msg.role === "assistant" ? renderChatMarkdown(msg.text) : msg.text}
+                {msg.role === "assistant"
+                  ? renderChatMarkdown(msg.text)
+                  : msg.text}
               </div>
             ))}
-            {chatLoading && <div className="chat-thinking">Working…</div>}
             <div ref={messagesEndRef} />
           </div>
 
@@ -318,7 +319,7 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
                 }
               }}
             />
-            <button className="chat-send-btn" onClick={handleChatSend} disabled={chatLoading}>
+            <button className="chat-send-btn" onClick={handleChatSend}>
               Send
             </button>
           </div>
