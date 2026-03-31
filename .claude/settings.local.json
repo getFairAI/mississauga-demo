@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"negation\\\\|iframe\\\\|game\\\\|url\" /Users/Connor/code/mississauga-demo --include=*.tsx --include=*.ts --include=*.json)"
+    ]
+  }
+}

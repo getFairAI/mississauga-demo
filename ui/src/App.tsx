@@ -1,281 +1,60 @@
 import { useEffect, useState } from "react";
-import {
-  Box,
-  Button,
-  CssBaseline,
-  Stack,
-  ThemeProvider,
-  createTheme,
-} from "@mui/material";
-import LouieWorkspace from "./components/LouieWorkspace";
-import KnowledgeWorkspace from "./components/KnowledgeWorkspace";
-import Chat, { type ChatEntry } from "./components/Chat";
-import { askAssistant, type AssistantResponse } from "./api";
+import MississaugaPage from "./pages/MississaugaPage";
+import HomePage from "./pages/HomePage";
+import TopicDetailPage from "./pages/TopicDetailPage";
+import SearchChatPage from "./pages/SearchChatPage";
 
-const theme = createTheme({
-  palette: {
-    mode: "light",
-    primary: { main: "#3aaaaa" },
-    secondary: { main: "#f97316" },
-    background: {
-      default: "#f7f9fb",
-      paper: "#ffffff",
-    },
-  },
-  typography: {
-    fontFamily: `'Manrope', 'Space Grotesk', 'Segoe UI', sans-serif`,
-    h5: {
-      fontFamily: `'Space Grotesk', 'Manrope', sans-serif`,
-      fontWeight: 700,
-    },
-    h6: {
-      fontFamily: `'Space Grotesk', 'Manrope', sans-serif`,
-      fontWeight: 700,
-    },
-  },
-  shape: {
-    borderRadius: 14,
-  },
-});
+type Route =
+  | { page: "mississauga" }
+  | { page: "home" }
+  | { page: "topic"; topicId: string }
+  | { page: "chat"; initialQuery?: string };
 
-type Route = "workspace" | "chat";
-
-type RouteState = { route: Route; transcriptId: string | null; solo: boolean };
-type ViewMode = "classic" | "modern";
-
-const parseHash = (hash: string): RouteState => {
+const parseHash = (hash: string): Route => {
   const trimmed = hash.startsWith("#") ? hash.slice(1) : hash;
   const [path = "/", query = ""] = trimmed.split("?");
   const params = new URLSearchParams(query);
-  const transcriptId = params.get("transcript");
-  const route: Route = path === "/chat" ? "chat" : "workspace";
-  const solo = params.get("solo") === "1";
-  return { route, transcriptId, solo };
+
+  if (path === "/home") return { page: "home" };
+  if (path.startsWith("/topic/")) {
+    const topicId = path.slice("/topic/".length);
+    return { page: "topic", topicId };
+  }
+  if (path === "/chat") {
+    return { page: "chat", initialQuery: params.get("q") ?? undefined };
+  }
+  // Default: Mississauga entry page
+  return { page: "mississauga" };
+};
+
+export const navigate = (hash: string) => {
+  window.location.hash = hash;
 };
 
 const App = () => {
-  const [routeState, setRouteState] = useState<RouteState>(() =>
+  const [route, setRoute] = useState<Route>(() =>
     parseHash(window.location.hash),
   );
-  const [viewMode, setViewMode] = useState<ViewMode>("classic");
-  const [chatMessages, setChatMessages] = useState<ChatEntry[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "I can surface answers from the transcripts, highlights, and summaries in this workspace.",
-    },
-  ]);
-  const [chatThinking, setChatThinking] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
 
   useEffect(() => {
-    const handler = () => setRouteState(parseHash(window.location.hash));
+    const handler = () => {
+      window.scrollTo(0, 0);
+      setRoute(parseHash(window.location.hash));
+    };
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
-  const navigate = (target: Route) => {
-    window.location.hash = target === "chat" ? "/chat" : "/";
-    setRouteState((prev) => ({ ...prev, route: target }));
-  };
-
-  const sendQuestion = async (text: string) => {
-    const question = text.trim();
-    if (!question) return;
-    setChatError(null);
-    setChatThinking(true);
-    setChatMessages((prev) => [
-      ...prev,
-      { id: `u-${Date.now()}-${prev.length}`, role: "user", text: question },
-    ]);
-    try {
-      const response: AssistantResponse = await askAssistant(question);
-      const answer =
-        (response.answer ?? "").trim() ||
-        (response.type === "chart"
-          ? "Generated a chart based on the workspace knowledge."
-          : "The assistant did not return an answer.");
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}-${prev.length}`,
-          role: "assistant",
-          text: answer,
-          chart: response.type === "chart" ? response.chart : undefined,
-          sources: response.sources,
-        },
-      ]);
-    } catch (err) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}-${prev.length}`,
-          role: "assistant",
-          text: "I hit an error while trying to answer that. Please try again.",
-        },
-      ]);
-      const message = err instanceof Error ? err.message : "Could not reach the assistant.";
-      setChatError(message);
-      console.error("Assistant error", err);
-    } finally {
-      setChatThinking(false);
-    }
-  };
-
-  const brandBlue = "#0057A8";
-
-  const modeSwitcher = (
-    <Stack
-      direction="row"
-      spacing={1}
-      sx={{
-        position: "fixed",
-        top: viewMode === "classic" ? 8 : 12,
-        right: 12,
-        zIndex: 1200,
-        background: viewMode === "classic" ? brandBlue : "transparent",
-        borderRadius: "999px",
-        p: viewMode === "classic" ? 0.5 : 0,
-        boxShadow: viewMode === "classic" ? "0 6px 14px rgba(0,87,168,0.25)" : "none",
-      }}
-    >
-      <Button
-        size="small"
-        variant={viewMode === "classic" ? "contained" : "outlined"}
-        color={viewMode === "classic" ? "inherit" : "primary"}
-        onClick={() => setViewMode("classic")}
-        sx={
-          viewMode === "classic"
-            ? {
-                bgcolor: "white",
-                color: brandBlue,
-                fontWeight: 700,
-                "&:hover": { bgcolor: "#f2f6ff" },
-              }
-            : {}
-        }
-      >
-        Classic
-      </Button>
-      <Button
-        size="small"
-        variant={viewMode === "modern" ? "contained" : "outlined"}
-        color={viewMode === "classic" ? "inherit" : "primary"}
-        onClick={() => setViewMode("modern")}
-        sx={
-          viewMode === "classic"
-            ? {
-                color: "white",
-                borderColor: "rgba(255,255,255,0.6)",
-                "&:hover": { bgcolor: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.9)" },
-              }
-            : {}
-        }
-      >
-        Modern
-      </Button>
-    </Stack>
-  );
-
-  if (viewMode === "classic") {
-    return (
-      <ThemeProvider theme={theme}>
-        <CssBaseline />
-        {routeState.route === "chat" ? (
-          <Chat
-            messages={chatMessages}
-            setMessages={setChatMessages}
-            loadingExternal={chatThinking}
-            errorExternal={chatError}
-            onSend={sendQuestion}
-            classicShell
-          />
-        ) : (
-          <LouieWorkspace
-            initialTranscriptId={routeState.transcriptId}
-            soloView={routeState.solo}
-            onAsk={async (text) => {
-              const value = text.trim();
-              if (!value) return;
-              window.location.hash = "/chat";
-              void sendQuestion(value);
-            }}
-          />
-        )}
-      </ThemeProvider>
-    );
+  switch (route.page) {
+    case "mississauga":
+      return <MississaugaPage />;
+    case "home":
+      return <HomePage />;
+    case "topic":
+      return <TopicDetailPage topicId={route.topicId} />;
+    case "chat":
+      return <SearchChatPage initialQuery={route.initialQuery} />;
   }
-
-  return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      {modeSwitcher}
-
-      <Box
-        sx={{
-          width: "100%",
-          minHeight: "100vh",
-          height: "100%",
-          background:
-            "linear-gradient(180deg, #f7f9fb 0%, #eef2ff 30%, #f9fafb 100%)",
-          p: { xs: 2, md: 3, lg: 4 },
-          display: "flex",
-        }}
-      >
-        <Box
-          width={"100%"}
-          height={"100%"}
-          sx={{
-            position: "relative",
-            overflow: "hidden",
-            borderRadius: 3,
-            p: { xs: 2.5, md: 3 },
-            bgcolor: "rgba(255,255,255,0.9)",
-            backdropFilter: "blur(10px)",
-            boxShadow: "0 30px 60px rgba(15,23,42,0.08)",
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-          }}
-        >
-          <Box
-            sx={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              background:
-                "radial-gradient(circle at 20% 20%, rgba(15,118,110,0.08), transparent 35%), radial-gradient(circle at 80% 10%, rgba(249,115,22,0.12), transparent 30%)",
-            }}
-          />
-          <Stack direction="row-reverse" spacing={2} pb={2}>
-            <Button
-              variant={routeState.route === "workspace" ? "contained" : "outlined"}
-              onClick={() => navigate("workspace")}
-            >
-              Workspace
-            </Button>
-            <Button
-              variant={routeState.route === "chat" ? "contained" : "outlined"}
-              onClick={() => navigate("chat")}
-            >
-              Chat
-            </Button>
-          </Stack>
-          {routeState.route === "chat" ? (
-            <Chat
-              messages={chatMessages}
-              setMessages={setChatMessages}
-              loadingExternal={chatThinking}
-              errorExternal={chatError}
-              onSend={sendQuestion}
-            />
-          ) : (
-            <KnowledgeWorkspace />
-          )}
-        </Box>
-      </Box>
-    </ThemeProvider>
-  );
 };
 
 export default App;

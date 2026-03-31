@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "louie-demo",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "source ~/.nvm/nvm.sh && nvm use 22 && cd ui && ./node_modules/.bin/vite --port 5174"],
+      "port": 5174
+    }
+  ]
+}
