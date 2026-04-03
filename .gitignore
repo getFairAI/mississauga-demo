@@ -1,5 +1,5 @@
 chunks/
-data/
+/data/
 .venv13/
 __pycache__
 transcriptions/
