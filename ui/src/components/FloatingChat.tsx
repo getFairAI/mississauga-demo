@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import {
   type Meeting,
   mockChatResponses,
@@ -33,7 +33,9 @@ const renderChatMarkdown = (text: string) => {
       const content = line.slice(3, line.endsWith("*") ? -1 : undefined);
       elements.push(<blockquote key={key++}>{content}</blockquote>);
     } else if (line.startsWith("> ")) {
-      elements.push(<blockquote key={key++}>{renderInline(line.slice(2))}</blockquote>);
+      elements.push(
+        <blockquote key={key++}>{renderInline(line.slice(2))}</blockquote>,
+      );
     } else if (line.startsWith("---")) {
       elements.push(<hr key={key++} />);
     } else if (line.startsWith("- ")) {
@@ -52,6 +54,8 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  streaming?: boolean; // currently being typed out
+  proposeCitizen?: boolean; // show "Propose as citizen point" button
 };
 
 const mockSessions = [
@@ -61,12 +65,38 @@ const mockSessions = [
   { id: "transit", label: "Transit fare policy" },
 ];
 
+// Trailing questions appended to AI responses
+const trailingQuestions = [
+  "\n\nDo you have any questions about this meeting?",
+  "\n\nWould you like to explore any of these points further?",
+  "\n\nIs there anything else you'd like to know?",
+];
+
 type Props = {
   meeting: Meeting;
 };
 
-const findMockResponse = (text: string, meeting: Meeting): string => {
+const findMockResponse = (
+  text: string,
+  meeting: Meeting,
+  messageCount: number,
+): { response: string; proposeCitizen: boolean } => {
   const lower = text.toLowerCase();
+
+  // Third interaction: citizen disagrees with allocation
+  if (
+    lower.includes("proportional") ||
+    lower.includes("don't think") ||
+    lower.includes("disagree") ||
+    lower.includes("collision data") ||
+    lower.includes("not the best") ||
+    lower.includes("better allocation")
+  ) {
+    return {
+      response: mockChatResponses["citizen-disagree"],
+      proposeCitizen: true,
+    };
+  }
 
   // Check for institutional memory
   if (
@@ -74,7 +104,12 @@ const findMockResponse = (text: string, meeting: Meeting): string => {
     lower.includes("forgetting") ||
     lower.includes("lost knowledge")
   ) {
-    return institutionalMemoryResponse;
+    return {
+      response:
+        institutionalMemoryResponse +
+        (trailingQuestions[messageCount % trailingQuestions.length] || ""),
+      proposeCitizen: false,
+    };
   }
 
   // Check for $2.2M / funding questions
@@ -85,7 +120,12 @@ const findMockResponse = (text: string, meeting: Meeting): string => {
     lower.includes("budget") ||
     lower.includes("provincial")
   ) {
-    return mockChatResponses["2.2m"];
+    return {
+      response:
+        mockChatResponses["2.2m"] +
+        (trailingQuestions[messageCount % trailingQuestions.length] || ""),
+      proposeCitizen: false,
+    };
   }
 
   // Check for school bus questions
@@ -94,7 +134,12 @@ const findMockResponse = (text: string, meeting: Meeting): string => {
     lower.includes("stop arm") ||
     lower.includes("camera")
   ) {
-    return mockChatResponses["school bus"];
+    return {
+      response:
+        mockChatResponses["school bus"] +
+        (trailingQuestions[messageCount % trailingQuestions.length] || ""),
+      proposeCitizen: false,
+    };
   }
 
   // Check for unresolved / what's pending
@@ -104,11 +149,78 @@ const findMockResponse = (text: string, meeting: Meeting): string => {
     lower.includes("deferred") ||
     lower.includes("never been resolved")
   ) {
-    return mockChatResponses["unresolved"];
+    return {
+      response:
+        mockChatResponses["unresolved"] +
+        (trailingQuestions[messageCount % trailingQuestions.length] || ""),
+      proposeCitizen: false,
+    };
   }
 
   // Default response
-  return `Based on the ${meeting.committee} meeting transcript from ${meeting.date}:\n\nThis is a mock response for the demo. In production, this would search the meeting transcript and deliberation records to answer: "${text}"\n\nThe AI would draw from:\n- **Full meeting transcript** with speaker attribution\n- **Structured argument maps** for each agenda item\n- **Historical records** showing how this issue has evolved across meetings`;
+  return {
+    response: `Based on the ${meeting.committee} meeting transcript from ${meeting.date}:\n\nThis is a mock response for the demo. In production, this would search the meeting transcript and deliberation records to answer: "${text}"\n\nThe AI would draw from:\n- **Full meeting transcript** with speaker attribution\n- **Structured argument maps** for each agenda item\n- **Historical records** showing how this issue has evolved across meetings\n\nIs there anything else you'd like to know about this meeting?`,
+    proposeCitizen: false,
+  };
+};
+
+// Typewriter component — streams text character by character then renders markdown
+const TypewriterMessage = ({
+  text,
+  speed = 8,
+  onComplete,
+}: {
+  text: string;
+  speed?: number;
+  onComplete?: () => void;
+}) => {
+  const [displayedLength, setDisplayedLength] = useState(0);
+  const [done, setDone] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setDisplayedLength(0);
+    setDone(false);
+  }, [text]);
+
+  useEffect(() => {
+    if (displayedLength >= text.length) {
+      setDone(true);
+      onComplete?.();
+      return;
+    }
+    // Speed up: jump by chunks for faster streaming feel
+    const chunkSize = Math.max(1, Math.floor(Math.random() * 3) + 1);
+    const timer = setTimeout(() => {
+      setDisplayedLength((prev) => Math.min(prev + chunkSize, text.length));
+    }, speed);
+    return () => clearTimeout(timer);
+  }, [displayedLength, text, speed, onComplete]);
+
+  // Scroll parent container as text grows
+  useEffect(() => {
+    const container = containerRef.current?.closest(".fc-messages");
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [displayedLength]);
+
+  if (done) {
+    return (
+      <div ref={containerRef} className="chat-msg assistant">
+        {renderChatMarkdown(text)}
+      </div>
+    );
+  }
+
+  // While streaming, show partial text as plain (avoids broken markdown)
+  const partial = text.slice(0, displayedLength);
+  return (
+    <div ref={containerRef} className="chat-msg assistant fc-streaming">
+      {renderChatMarkdown(partial)}
+      <span className="fc-cursor" />
+    </div>
+  );
 };
 
 const FloatingChat = ({ meeting }: Props) => {
@@ -118,18 +230,26 @@ const FloatingChat = ({ meeting }: Props) => {
   const [draftInput, setDraftInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [thinking, setThinking] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [hasOpened, setHasOpened] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const assistantMsgCount = useRef(0);
 
-  // Initialize with meeting summary
+  // Initialize with meeting summary + trailing question
   useEffect(() => {
+    const summaryText =
+      meeting.summary + "\n\nDo you have any questions about this meeting?";
     setMessages([
       {
         id: "summary",
         role: "assistant",
-        text: meeting.summary,
+        text: summaryText,
+        streaming: true,
       },
     ]);
+    setStreamingId("summary");
+    assistantMsgCount.current = 0;
   }, [meeting.id]);
 
   // Scroll chat to bottom on new messages
@@ -147,13 +267,20 @@ const FloatingChat = ({ meeting }: Props) => {
     }
   }, [expanded, closing]);
 
+  const handleStreamComplete = useCallback((msgId: string) => {
+    setStreamingId(null);
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, streaming: false } : m)),
+    );
+  }, []);
+
   const handleClose = () => {
     setClosing(true);
     setSidebarOpen(false);
     setTimeout(() => {
       setExpanded(false);
       setClosing(false);
-    }, 200);
+    }, 250);
   };
 
   const handleOverlayClick = (e: React.MouseEvent) => {
@@ -172,17 +299,26 @@ const FloatingChat = ({ meeting }: Props) => {
     ]);
     setThinking(true);
 
-    const response = findMockResponse(text, meeting);
+    assistantMsgCount.current++;
+    const { response, proposeCitizen } = findMockResponse(
+      text,
+      meeting,
+      assistantMsgCount.current,
+    );
 
+    const msgId = `a-${Date.now()}`;
     setTimeout(() => {
       setMessages((prev) => [
         ...prev,
         {
-          id: `a-${Date.now()}`,
+          id: msgId,
           role: "assistant",
           text: response,
+          streaming: true,
+          proposeCitizen,
         },
       ]);
+      setStreamingId(msgId);
       setThinking(false);
     }, 1200);
   };
@@ -196,13 +332,33 @@ const FloatingChat = ({ meeting }: Props) => {
 
   const handleBarClick = () => {
     setExpanded(true);
+    if (!hasOpened) setHasOpened(true);
+  };
+
+  const handleProposeCitizen = (msgId: string) => {
+    // Mark the button as clicked and add a confirmation message
+    setMessages((prev) => [
+      ...prev.map((m) =>
+        m.id === msgId ? { ...m, proposeCitizen: false } : m,
+      ),
+      {
+        id: `citizen-${Date.now()}`,
+        role: "assistant",
+        text: `Your point has been submitted to the **Citizen Engagement Coordinator** for review. If approved, it will be added to the deliberation map as a citizen-contributed argument.\n\nThis is a premium feature of the Civic Deliberative Memory platform. Citizen contributions are reviewed by the municipality's designated coordinator before being surfaced to councillors.\n\nThank you for participating in Mississauga's civic deliberation process.`,
+        streaming: true,
+      },
+    ]);
+    setStreamingId(`citizen-${Date.now()}`);
   };
 
   return (
     <>
       {/* Collapsed bar */}
       {!expanded && (
-        <div className="fc-bar" onClick={handleBarClick}>
+        <div
+          className={`fc-bar ${hasOpened ? "fc-bar-returning" : "fc-bar-initial"}`}
+          onClick={handleBarClick}
+        >
           <svg
             width="16"
             height="16"
@@ -210,7 +366,13 @@ const FloatingChat = ({ meeting }: Props) => {
             fill="none"
             className="fc-bar-icon"
           >
-            <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+            <circle
+              cx="8"
+              cy="8"
+              r="7"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            />
             <path
               d="M7.5 4.5v4l2.5 1.5"
               stroke="currentColor"
@@ -305,10 +467,42 @@ const FloatingChat = ({ meeting }: Props) => {
             {/* Messages */}
             <div className="fc-messages">
               {messages.map((msg) => (
-                <div key={msg.id} className={`chat-msg ${msg.role}`}>
-                  {msg.role === "assistant"
-                    ? renderChatMarkdown(msg.text)
-                    : msg.text}
+                <div key={msg.id}>
+                  {msg.role === "assistant" && msg.streaming ? (
+                    <TypewriterMessage
+                      text={msg.text}
+                      speed={streamingId === "summary" ? 4 : 6}
+                      onComplete={() => handleStreamComplete(msg.id)}
+                    />
+                  ) : (
+                    <div className={`chat-msg ${msg.role}`}>
+                      {msg.role === "assistant"
+                        ? renderChatMarkdown(msg.text)
+                        : msg.text}
+                    </div>
+                  )}
+                  {/* Propose citizen point button */}
+                  {msg.proposeCitizen && !msg.streaming && (
+                    <button
+                      className="fc-propose-btn"
+                      onClick={() => handleProposeCitizen(msg.id)}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                      >
+                        <path
+                          d="M7 1v12M1 7h12"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      Propose as citizen point
+                    </button>
+                  )}
                 </div>
               ))}
               {thinking && (

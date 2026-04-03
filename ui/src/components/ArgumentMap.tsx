@@ -37,7 +37,43 @@ export type QuestionMap = {
   referral?: string;
 };
 
-const NodeRow = ({ node }: { node: ArgNode }) => {
+// Build a human-readable tooltip for a node tag
+const buildTooltip = (node: ArgNode, parentOption?: string): string => {
+  const shortOption = parentOption
+    ? parentOption.replace(/^O\d+\s*—\s*/, "").toLowerCase()
+    : "";
+
+  switch (node.type) {
+    case "support":
+      return shortOption
+        ? `Supports "${shortOption}"`
+        : "Supports the main claim";
+    case "negate":
+      return shortOption
+        ? `Disputes "${shortOption}"`
+        : "Disputes the main claim";
+    case "mitigate": {
+      // Parse what it mitigates from the tag, e.g. M(N1).1 mitigates N1
+      const mitigates = node.tag.match(/M\(([^)]+)\)/);
+      if (mitigates) {
+        const target = mitigates[1];
+        if (target.startsWith("N")) {
+          return `Mitigates the objection (${target}) by offering a counterpoint`;
+        }
+        return `Mitigates ${target}`;
+      }
+      return "Mitigates a prior point";
+    }
+  }
+};
+
+const NodeRow = ({
+  node,
+  parentOption,
+}: {
+  node: ArgNode;
+  parentOption?: string;
+}) => {
   const typeClass =
     node.type === "support"
       ? "am-node-s"
@@ -45,9 +81,13 @@ const NodeRow = ({ node }: { node: ArgNode }) => {
         ? "am-node-n"
         : "am-node-m";
 
+  const tooltip = buildTooltip(node, parentOption);
+
   return (
     <div className={`am-node ${typeClass}`}>
-      <div className="am-node-tag">{node.tag}</div>
+      <div className="am-node-tag" title={tooltip}>
+        {node.tag}
+      </div>
       <div className="am-node-content">
         {node.content}
         {node.speaker && (
@@ -87,7 +127,7 @@ const QuestionBlock = ({ q }: { q: QuestionMap }) => {
               {oi > 0 && <div className="am-option-divider" />}
               <div className="am-option-label">{opt.label}</div>
               {opt.nodes.map((node, ni) => (
-                <NodeRow key={ni} node={node} />
+                <NodeRow key={ni} node={node} parentOption={opt.label} />
               ))}
             </div>
           ))}
