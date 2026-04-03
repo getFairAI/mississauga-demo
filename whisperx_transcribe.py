@@ -1,4 +1,5 @@
 # whisperx_transcriber.py
+import asyncio
 import os
 from pathlib import Path
 from typing import Callable, Any, List
@@ -47,7 +48,7 @@ def transcribe_with_whisperx(
         transcribe_kwargs["progress_callback"] = progress_callback
 
     send("transcribe", {"percent": 15})
-    result = model.transcribe(audio, **transcribe_kwargs)
+    result = model.transcribe(audio, language="en", **transcribe_kwargs)
     send("transcribe", {"percent": 60})
 
     send("load_align_model", {"percent": 70})
@@ -77,7 +78,7 @@ def transcribe_with_whisperx(
         raise RuntimeError("HF_TOKEN is missing from environment variables!")
 
     diarize_model = DiarizationPipeline(
-        use_auth_token=hf_token,
+        token=hf_token,
         device=device,
     )
     diarize_kwargs = {}
@@ -139,7 +140,7 @@ async def transcribe_large_file_chunked(
             if chunk_output.exists():
                 text = chunk_output.read_text(encoding="utf-8")
             else:
-                text = await transcribe_with_whisperx(chunk)
+                text = await asyncio.to_thread(transcribe_with_whisperx, chunk)
                 chunk_output.write_text(text, encoding="utf-8")
 
             combined.append(text)

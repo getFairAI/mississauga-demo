@@ -1,22 +1,7 @@
 # summarize_call.py
-import os
-import ollama
 import sys
 from pathlib import Path
-from openai import OpenAI
-
-
-USE_OPEN_SOURCE = os.getenv("USE_OPEN_SOURCE_AI", "false").lower() == "true"
-
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError(
-        "OPENAI_API_KEY não está definido nas variáveis de ambiente.\n"
-        "Adiciona ao teu .env, por exemplo:\n"
-        'OPENAI_API_KEY="sk-..."'
-    )
-
-client = OpenAI(api_key=api_key)
+from ai_utils import ai_call
 
 
 def generate_summary(
@@ -25,9 +10,7 @@ def generate_summary(
     total_chunks: int | None = None,
     prior_summary: str | None = None,
 ) -> str:
-    """
-    Gera um resumo completo e detalhado a partir de uma transcrição de chamada.
-    """
+    """Generate a structured summary from a transcript chunk."""
     position_note = (
         f"You are summarizing chunk {chunk_index} of {total_chunks} from a longer transcript."
         if chunk_index is not None and total_chunks is not None
@@ -56,48 +39,58 @@ def generate_summary(
         "Return the UPDATED overall summary (not just the chunk)."
     )
 
-    
-    if USE_OPEN_SOURCE:
-        # ---------- OLLAMA ----------
-        prompt = f"{system_msg}\n\n{user_msg}"
-        response = ollama.generate(
-            model="qwen2.5:32b",
-            prompt=prompt.strip(),
-        )
-        return response["response"].strip()
+    return ai_call(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.2,
+    )
 
-    else:
-        # ---------- OPENAI ----------
-        response = client.chat.completions.create(
-            model="gpt-5.2",
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.2,
-        )
-        return response.choices[0].message.content.strip()
+
+def consolidate_summaries(chunk_summaries: list[str]) -> str:
+    """Merge independent per-chunk summaries into one comprehensive summary."""
+    combined = "\n\n---\n\n".join(
+        f"Section {i + 1}:\n{s}" for i, s in enumerate(chunk_summaries)
+    )
+    system_msg = (
+        "You are given summaries from different sections of a single meeting transcript.\n"
+        "Merge them into ONE comprehensive, non-repetitive summary.\n"
+        "- Keep all unique facts, decisions, action items, participants, dates, and amounts.\n"
+        "- Remove exact or near-duplicate points; combine related items into single statements.\n"
+        "- Organize by theme (not by section order).\n"
+        "- Aim for 10-16 concise bullet points or short paragraphs.\n"
+        "- Write in clear, professional English.\n"
+        "- Do NOT add information not present in the input summaries.\n"
+    )
+    return ai_call(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": f"Section summaries to consolidate:\n\n{combined}"},
+        ],
+        temperature=0.2,
+    )
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Uso: python summarize_call.py caminho_para_transcript.txt")
+        print("Usage: python summarize_call.py path/to/transcript.txt")
         sys.exit(1)
 
     transcript_path = Path(sys.argv[1]).resolve()
     if not transcript_path.exists():
-        print(f"Ficheiro não encontrado: {transcript_path}")
+        print(f"File not found: {transcript_path}")
         sys.exit(1)
 
     transcript_text = transcript_path.read_text(encoding="utf-8")
 
-    print(f"[INFO] A gerar resumo para: {transcript_path}")
-    resumo = generate_summary(transcript_text)
+    print(f"[INFO] Generating summary for: {transcript_path}")
+    summary = generate_summary(transcript_text)
 
     summary_path = transcript_path.with_name(f"{transcript_path.stem}_summary.txt")
-    summary_path.write_text(resumo, encoding="utf-8")
+    summary_path.write_text(summary, encoding="utf-8")
 
-    print(f"[OK] Ficheiro criado: {summary_path}")
+    print(f"[OK] Summary written to: {summary_path}")
 
 
 if __name__ == "__main__":
