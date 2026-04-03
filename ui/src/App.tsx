@@ -1,34 +1,20 @@
 import { useEffect, useState } from "react";
 import MississaugaPage from "./pages/MississaugaPage";
-import HomePage from "./pages/HomePage";
-import TopicDetailPage from "./pages/TopicDetailPage";
-import SearchChatPage from "./pages/SearchChatPage";
-import TranscriptPage from "./pages/TranscriptPage";
+import CdmPage from "./pages/CdmPage";
 
 type Route =
   | { page: "mississauga" }
-  | { page: "home" }
-  | { page: "topic"; topicId: string }
-  | { page: "transcript"; transcriptId: string }
-  | { page: "chat"; initialQuery?: string };
+  | { page: "cdm"; meetingId: string };
 
 const parseHash = (hash: string): Route => {
   const trimmed = hash.startsWith("#") ? hash.slice(1) : hash;
-  const [path = "/", query = ""] = trimmed.split("?");
-  const params = new URLSearchParams(query);
+  const [path = "/"] = trimmed.split("?");
 
-  if (path === "/home") return { page: "home" };
-  if (path.startsWith("/topic/")) {
-    const topicId = path.slice("/topic/".length);
-    return { page: "topic", topicId };
+  if (path.startsWith("/cdm/")) {
+    const meetingId = path.slice("/cdm/".length);
+    return { page: "cdm", meetingId };
   }
-  if (path.startsWith("/transcript/")) {
-    const transcriptId = path.slice("/transcript/".length);
-    return { page: "transcript", transcriptId };
-  }
-  if (path === "/chat") {
-    return { page: "chat", initialQuery: params.get("q") ?? undefined };
-  }
+  // Default: Mississauga entry page
   return { page: "mississauga" };
 };
 
@@ -53,14 +39,8 @@ const App = () => {
   switch (route.page) {
     case "mississauga":
       return <MississaugaPage />;
-    case "home":
-      return <HomePage />;
-    case "topic":
-      return <TopicDetailPage topicId={route.topicId} />;
-    case "transcript":
-      return <TranscriptPage transcriptId={route.transcriptId} />;
-    case "chat":
-      return <SearchChatPage initialQuery={route.initialQuery} />;
+    case "cdm":
+      return <CdmPage meetingId={route.meetingId} />;
   }
 };
 

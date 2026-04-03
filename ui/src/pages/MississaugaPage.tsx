@@ -1,7 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { navigate } from "../App";
-import { useTranscriptions } from "../hooks/useTranscriptions";
-import type { TranscriptListItem } from "../api";
+import { mostRecentMeeting } from "../data/mockData";
 
 const navItems = [
   "Services and programs",
@@ -11,20 +10,178 @@ const navItems = [
   "Projects and strategies",
 ];
 
-function groupByTopic(transcripts: TranscriptListItem[]): Record<string, TranscriptListItem[]> {
-  return transcripts.reduce<Record<string, TranscriptListItem[]>>((acc, t) => {
-    const key = t.topic ?? "Other";
-    (acc[key] ??= []).push(t);
-    return acc;
-  }, {});
+interface Meeting {
+  committee: string;
+  date: string;
+  time: string;
+  location: string;
+  agenda?: { html: string; pdf: string };
+  addendum?: { html: string; pdf: string };
+  revisedAgenda?: { html: string; pdf: string };
+  video?: boolean;
+  cdmMeetingId?: string; // links to a CDM meeting if available
 }
 
-const MississaugaPage = () => {
-  const { data: transcripts, loading, error } = useTranscriptions();
-  const grouped = useMemo(() => groupByTopic(transcripts), [transcripts]);
-  const topicNames = useMemo(() => Object.keys(grouped).sort(), [grouped]);
+interface Committee {
+  name: string;
+  meetings: Meeting[];
+}
 
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+const committees: Committee[] = [
+  {
+    name: "Mississauga Cycling Advisory Committee",
+    meetings: [
+      {
+        committee: "Mississauga Cycling Advisory Committee",
+        date: "Tuesday, 10 February 2026",
+        time: "6:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+    ],
+  },
+  {
+    name: "Mississauga School Traffic Safety Action Committee",
+    meetings: [
+      {
+        committee: "Mississauga School Traffic Safety Action Committee",
+        date: "Tuesday, 10 March 2026",
+        time: "9:30 AM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+      {
+        committee: "Mississauga School Traffic Safety Action Committee",
+        date: "Tuesday, 13 January 2026",
+        time: "9:30 AM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+    ],
+  },
+  {
+    name: "Planning and Development Committee",
+    meetings: [
+      {
+        committee: "Planning and Development Committee",
+        date: "Monday, 23 March 2026",
+        time: "7:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+      {
+        committee: "Planning and Development Committee",
+        date: "Monday, 9 March 2026",
+        time: "7:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+      {
+        committee: "Planning and Development Committee",
+        date: "Monday, 23 February 2026",
+        time: "7:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+      {
+        committee: "Planning and Development Committee",
+        date: "Monday, 26 January 2026",
+        time: "7:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+    ],
+  },
+  {
+    name: "Promotional Awareness Subcommittee of AAC",
+    meetings: [
+      {
+        committee: "Promotional Awareness Subcommittee of AAC",
+        date: "Wednesday, 11 March 2026",
+        time: "1:00 PM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+      },
+      {
+        committee: "Promotional Awareness Subcommittee of AAC",
+        date: "Wednesday, 14 January 2026",
+        time: "1:00 PM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+      },
+    ],
+  },
+  {
+    name: "Road Safety Committee",
+    meetings: [
+      {
+        committee: "Road Safety Committee",
+        date: "Tuesday, 24 March 2026",
+        time: "8:30 AM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+        addendum: { html: "#", pdf: "#" },
+        revisedAgenda: { html: "#", pdf: "#" },
+        video: true,
+        cdmMeetingId: "road-safety-2026-03-24",
+      },
+      {
+        committee: "Road Safety Committee",
+        date: "Tuesday, 27 January 2026",
+        time: "9:30 AM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+        cdmMeetingId: "road-safety-2026-01-27",
+      },
+    ],
+  },
+  {
+    name: "Stormwater Advisory Committee",
+    meetings: [
+      {
+        committee: "Stormwater Advisory Committee",
+        date: "Thursday, 19 March 2026",
+        time: "2:00 PM",
+        location: "Online Video Conference",
+        agenda: { html: "#", pdf: "#" },
+      },
+    ],
+  },
+  {
+    name: "Transit Advisory Committee",
+    meetings: [
+      {
+        committee: "Transit Advisory Committee",
+        date: "Wednesday, 18 March 2026",
+        time: "4:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+      {
+        committee: "Transit Advisory Committee",
+        date: "Wednesday, 21 January 2026",
+        time: "4:00 PM",
+        location: "Council Chambers, Civic Centre, 2nd Floor",
+        agenda: { html: "#", pdf: "#" },
+        video: true,
+      },
+    ],
+  },
+];
+
+const MississaugaPage = () => {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({
+    "Road Safety Committee": true,
+  });
 
   const toggle = (name: string) => {
     setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
@@ -113,29 +270,18 @@ const MississaugaPage = () => {
               </div>
 
               {/* Committee accordions */}
-              {loading && (
-                <div style={{ color: "#999", padding: "1rem 0", fontSize: "0.9rem" }}>
-                  Loading meetings…
-                </div>
-              )}
-              {error && (
-                <div style={{ color: "#c00", padding: "1rem 0", fontSize: "0.9rem" }}>
-                  {error}
-                </div>
-              )}
               <div className="msga-accordion-list">
-                {topicNames.map((topic) => {
-                  const meetings = grouped[topic];
-                  const isOpen = !!expanded[topic];
+                {committees.map((committee) => {
+                  const isOpen = !!expanded[committee.name];
                   return (
-                    <div key={topic} className="msga-accordion">
+                    <div key={committee.name} className="msga-accordion">
                       <button
                         className="msga-accordion-header"
-                        onClick={() => toggle(topic)}
+                        onClick={() => toggle(committee.name)}
                         aria-expanded={isOpen}
                       >
                         <span className="msga-accordion-title">
-                          {topic} ({meetings.length})
+                          {committee.name} ({committee.meetings.length})
                         </span>
                         <span className="msga-accordion-chevron">
                           {isOpen ? "\u203A" : "\u02C7"}
@@ -143,8 +289,8 @@ const MississaugaPage = () => {
                       </button>
                       {isOpen && (
                         <div className="msga-accordion-body">
-                          {meetings.map((t) => (
-                            <div key={t.id} className="msga-meeting-row">
+                          {committee.meetings.map((meeting, idx) => (
+                            <div key={idx} className="msga-meeting-row">
                               <div className="msga-meeting-left">
                                 <div className="msga-meeting-share">
                                   <svg
@@ -164,25 +310,73 @@ const MississaugaPage = () => {
                                 </div>
                                 <div>
                                   <a href="#" className="msga-meeting-name">
-                                    {t.title}
+                                    {meeting.committee}
                                   </a>
-                                  <a
-                                    href={`#/topic/${t.id}`}
-                                    className="msga-meeting-louie-link"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      navigate(`/topic/${t.id}`);
-                                    }}
-                                  >
-                                    Civic Deliberative Memory
-                                  </a>
+                                  <div className="msga-meeting-datetime">
+                                    {meeting.date} @ {meeting.time}
+                                  </div>
+                                  <div className="msga-meeting-location">
+                                    {meeting.location}
+                                  </div>
                                 </div>
                               </div>
                               <div className="msga-meeting-right">
-                                {t.duration !== null && (
+                                {meeting.agenda && (
+                                  <div className="msga-meeting-doc-group">
+                                    <span className="msga-meeting-doc-label">
+                                      Agenda
+                                    </span>
+                                    <a href={meeting.agenda.html}>HTML</a>
+                                    <span className="msga-meeting-doc-sep">
+                                      |
+                                    </span>
+                                    <a href={meeting.agenda.pdf}>PDF</a>
+                                  </div>
+                                )}
+                                {meeting.addendum && (
+                                  <div className="msga-meeting-doc-group">
+                                    <span className="msga-meeting-doc-label">
+                                      Addendum
+                                    </span>
+                                    <a href={meeting.addendum.html}>HTML</a>
+                                    <span className="msga-meeting-doc-sep">
+                                      |
+                                    </span>
+                                    <a href={meeting.addendum.pdf}>PDF</a>
+                                  </div>
+                                )}
+                                {meeting.revisedAgenda && (
+                                  <div className="msga-meeting-doc-group">
+                                    <span className="msga-meeting-doc-label">
+                                      Revised Agenda
+                                    </span>
+                                    <a href={meeting.revisedAgenda.html}>
+                                      HTML
+                                    </a>
+                                    <span className="msga-meeting-doc-sep">
+                                      |
+                                    </span>
+                                    <a href={meeting.revisedAgenda.pdf}>PDF</a>
+                                  </div>
+                                )}
+                                {meeting.video && (
                                   <div className="msga-meeting-doc-group">
                                     <a href="#" className="msga-meeting-video">
                                       Video
+                                    </a>
+                                  </div>
+                                )}
+                                {meeting.cdmMeetingId && (
+                                  <div className="msga-meeting-doc-group">
+                                    <a
+                                      href={`#/cdm/${meeting.cdmMeetingId}`}
+                                      className="msga-meeting-memory-link"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        navigate(`/cdm/${meeting.cdmMeetingId}`);
+                                      }}
+                                    >
+                                      Memory
                                     </a>
                                   </div>
                                 )}
@@ -223,17 +417,19 @@ const MississaugaPage = () => {
                 }}
               />
 
-              {/* Louie entry point - highlighted */}
-              <a
-                href="#/home"
-                className="msga-sidebar-link louie-link"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/home");
-                }}
+              {/* Louie entry point - highlighted block */}
+              <div
+                className="msga-sidebar-cdm-block"
+                onClick={() => navigate(`/cdm/${mostRecentMeeting.id}`)}
               >
-                Civic Deliberative Memory
-              </a>
+                <div className="msga-sidebar-cdm-label">Civic Deliberative Memory</div>
+                <div className="msga-sidebar-cdm-meeting">
+                  {mostRecentMeeting.committee}
+                </div>
+                <div className="msga-sidebar-cdm-date">
+                  {mostRecentMeeting.date}
+                </div>
+              </div>
             </div>
           </aside>
         </div>

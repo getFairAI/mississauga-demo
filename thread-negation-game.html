@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Louie — March 19 Argument Map</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f5f3ef;
+    --surface: #ffffff;
+    --border: #e2ddd6;
+    --text-primary: #1a1814;
+    --text-secondary: #6b6560;
+    --text-muted: #9b958e;
+    --accent: #2d5a8e;
+    --accent-light: #e8eef5;
+    --support: #1a6644;
+    --support-bg: #edf7f2;
+    --negate: #8e2d2d;
+    --negate-bg: #f7edee;
+    --mitigate: #7a5c1a;
+    --mitigate-bg: #f7f2e8;
+    --unresolved: #5a3d8e;
+    --unresolved-bg: #f0ecf7;
+    --info: #1a5a6e;
+    --info-bg: #eaf4f7;
+    --subq: #4a4a4a;
+    --subq-bg: #f2f2f2;
+    --mono: 'DM Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    font-family: var(--sans);
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.65;
+    padding: 40px 24px 80px;
+  }
+
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 48px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .header h1 {
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+  }
+
+  .header-sub {
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  /* Section labels */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Artifact 1: Word Count */
+  .wordcount-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px 28px;
+    margin-bottom: 48px;
+    display: flex;
+    gap: 0;
+  }
+
+  .wc-stat {
+    flex: 1;
+    padding: 0 24px;
+    border-right: 1px solid var(--border);
+  }
+
+  .wc-stat:first-child { padding-left: 0; }
+  .wc-stat:last-child { border-right: none; }
+
+  .wc-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .wc-value {
+    font-size: 32px;
+    font-weight: 300;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .wc-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  /* Questions */
+  .question-block {
+    margin-bottom: 40px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .question-header {
+    background: var(--accent-light);
+    border-bottom: 1px solid #d0dcec;
+    padding: 18px 24px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  .question-number {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 500;
+    white-space: nowrap;
+    padding-top: 2px;
+  }
+
+  .question-text {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--accent);
+    line-height: 1.4;
+    flex: 1;
+  }
+
+  .question-status {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+
+  .status-open {
+    background: #fff3e0;
+    color: #8a5700;
+    border: 1px solid #f5d78e;
+  }
+
+  .status-closed {
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: 1px solid #a5d6a7;
+  }
+
+  .question-body {
+    padding: 20px 24px;
+  }
+
+  /* Options */
+  .option-block {
+    margin-bottom: 20px;
+  }
+
+  .option-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+
+  /* Claim block for closed questions */
+  .claim-block {
+    background: var(--bg);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
+    border-radius: 0 4px 4px 0;
+    margin-bottom: 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  /* Nodes */
+  .node {
+    display: flex;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 5px;
+    margin-bottom: 5px;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .node-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+    padding-top: 2px;
+    min-width: 52px;
+  }
+
+  .node-content { flex: 1; }
+
+  .node-speaker {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  /* Node types */
+  .node-s { background: var(--support-bg); }
+  .node-s .node-tag { color: var(--support); }
+
+  .node-n { background: var(--negate-bg); }
+  .node-n .node-tag { color: var(--negate); }
+
+  .node-m {
+    background: var(--mitigate-bg);
+    margin-left: 20px;
+  }
+  .node-m .node-tag { color: var(--mitigate); }
+
+  /* Sub-question */
+  .subq-block {
+    background: var(--subq-bg);
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 12px 0;
+  }
+
+  .subq-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--subq);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+
+  .subq-text {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .subq-answer {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding-left: 12px;
+    border-left: 2px solid #ccc;
+    margin-top: 6px;
+  }
+
+  /* Unresolved */
+  .unresolved-block {
+    background: var(--unresolved-bg);
+    border: 1px solid #d4ccea;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 12px 0;
+  }
+
+  .unresolved-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--unresolved);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  .unresolved-item {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 3px;
+    padding-left: 12px;
+    border-left: 2px solid #b8a8e8;
+  }
+
+  /* Info items */
+  .info-block {
+    background: var(--info-bg);
+    border: 1px solid #c0dce8;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+  }
+
+  .info-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--info);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  .info-item {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    padding-left: 12px;
+    border-left: 2px solid #8ec4d8;
+  }
+
+  /* Referral / added-to */
+  .referral-note {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    background: var(--bg);
+    border-radius: 4px;
+    margin-top: 10px;
+    display: inline-block;
+  }
+
+  /* Global unresolved section */
+  .global-unresolved {
+    background: var(--surface);
+    border: 1px solid #d4ccea;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 40px;
+  }
+
+  .global-unresolved-header {
+    background: var(--unresolved-bg);
+    border-bottom: 1px solid #d4ccea;
+    padding: 14px 24px;
+  }
+
+  .global-unresolved-header h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--unresolved);
+  }
+
+  .global-unresolved-body {
+    padding: 16px 24px;
+  }
+
+  .global-unresolved-item {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+
+  .global-unresolved-item:last-child { border-bottom: none; }
+
+  .unresolved-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--unresolved);
+    font-weight: 500;
+    min-width: 20px;
+    padding-top: 1px;
+  }
+
+  /* Divider between options */
+  .option-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 16px 0;
+  }
+
+  /* Info section */
+  .info-section {
+    background: var(--surface);
+    border: 1px solid #c0dce8;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 40px;
+  }
+
+  .info-section-header {
+    background: var(--info-bg);
+    border-bottom: 1px solid #c0dce8;
+    padding: 14px 24px;
+  }
+
+  .info-section-header h3 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--info);
+  }
+
+  .info-section-body {
+    padding: 16px 24px;
+  }
+
+  .info-section-item {
+    display: flex;
+    gap: 12px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+    color: var(--text-secondary);
+  }
+
+  .info-section-item:last-child { border-bottom: none; }
+
+  .info-dot {
+    color: var(--info);
+    font-family: var(--mono);
+    font-size: 14px;
+    padding-top: 1px;
+  }
+
+  @media (max-width: 600px) {
+    .wordcount-card { flex-direction: column; }
+    .wc-stat { border-right: none; border-bottom: 1px solid var(--border); padding: 16px 0; }
+    .wc-stat:last-child { border-bottom: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-meta">Louie · Argument Map · March 19, 2026</div>
+    <h1>RnDAO + NGi Working Session</h1>
+    <div class="header-sub">Participants: Connor McCormick, Paul Winsor, Andrea Gallagher, Daniel Ospina &nbsp;·&nbsp; 38 mins</div>
+  </div>
+
+  <!-- ARTIFACT 1 -->
+  <div class="section-label">Artifact 1 — Word Count</div>
+  <div class="wordcount-card">
+    <div class="wc-stat">
+      <div class="wc-label">Raw transcript</div>
+      <div class="wc-value">5,155</div>
+      <div class="wc-desc">words</div>
+    </div>
+    <div class="wc-stat">
+      <div class="wc-label">Critical words</div>
+      <div class="wc-value">~520</div>
+      <div class="wc-desc">substantive content</div>
+    </div>
+    <div class="wc-stat">
+      <div class="wc-label">Compression ratio</div>
+      <div class="wc-value">10:1</div>
+      <div class="wc-desc">signal extracted</div>
+    </div>
+  </div>
+
+  <!-- ARTIFACT 2 -->
+  <div class="section-label">Artifact 2 — Argument Map</div>
+
+  <!-- Q1 -->
+  <div class="question-block">
+    <div class="question-header">
+      <div class="question-number">Q1</div>
+      <div class="question-text">What is the right go-to-market sequence for Louie?</div>
+      <div class="question-status status-open">Open</div>
+    </div>
+    <div class="question-body">
+
+      <div class="option-block">
+        <div class="option-label">O1 — Send to Road Safety Committee councillors first, then city manager</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).1</div>
+          <div class="node-content">Councillors who attended the meeting are the most relevant first audience
+            <div class="node-speaker">Connor McCormick · 0:20</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).2</div>
+          <div class="node-content">Getting a councillor introduction to the city manager is the ideal path
+            <div class="node-speaker">Connor McCormick · 0:20</div>
+          </div>
+        </div>
+        <div class="node node-m">
+          <div class="node-tag">M(O1).1</div>
+          <div class="node-content">Will reach out to city manager directly regardless of councillor response
+            <div class="node-speaker">Paul Winsor · 0:55</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-divider"></div>
+
+      <div class="option-block">
+        <div class="option-label">O2 — Mass outreach to municipalities using eScribe</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O2).1</div>
+          <div class="node-content">440 municipalities in Ontario, many on eScribe — a blitz is feasible
+            <div class="node-speaker">Paul Winsor · 28:16</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O2).2</div>
+          <div class="node-content">Can frame as "additional value from your eScribe subscription"
+            <div class="node-speaker">Connor McCormick · 28:32</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O2).3</div>
+          <div class="node-content">Municipal contacts are all public — highly accessible clientele
+            <div class="node-speaker">Connor McCormick · 24:41</div>
+          </div>
+        </div>
+        <div class="node node-n">
+          <div class="node-tag">N(O2).1</div>
+          <div class="node-content">Not in position to learn fast enough to support that volume
+            <div class="node-speaker">Andrea Gallagher · 25:45</div>
+          </div>
+        </div>
+        <div class="node node-m">
+          <div class="node-tag">M(N(O2).1).1</div>
+          <div class="node-content">Can set a cap — test with 10, then increase in batches
+            <div class="node-speaker">Daniel Ospina · 26:22</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-divider"></div>
+
+      <div class="option-block">
+        <div class="option-label">O3 — Mass email asking municipalities to self-select their committee</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O3).1</div>
+          <div class="node-content">2% response rate still generates meaningful leads
+            <div class="node-speaker">Andrea Gallagher · 25:00</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O3).2</div>
+          <div class="node-content">Expression of interest filters serious prospects
+            <div class="node-speaker">Andrea Gallagher · 25:40</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O3).3</div>
+          <div class="node-content">Letting them pick the committee surfaces what they actually care about
+            <div class="node-speaker">Andrea Gallagher · 27:02</div>
+          </div>
+        </div>
+        <div class="node node-n">
+          <div class="node-tag">N(O3).1</div>
+          <div class="node-content">Could access their transcripts anyway — they are on the web
+            <div class="node-speaker">Paul Winsor · 25:34</div>
+          </div>
+        </div>
+        <div class="node node-m">
+          <div class="node-tag">M(N(O3).1).1</div>
+          <div class="node-content">Asking them to act creates a commitment signal
+            <div class="node-speaker">Andrea Gallagher · 25:40</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="subq-block">
+        <div class="subq-label">Sub-question</div>
+        <div class="subq-text">Should we try Colorado? — Paul Winsor · 29:01</div>
+        <div class="subq-answer">Colorado government is competent and tech-friendly — Connor McCormick · 35:00</div>
+        <div class="subq-answer">Different vendor (Granicus) — not eScribe — Connor McCormick · 29:05</div>
+      </div>
+
+      <div class="unresolved-block">
+        <div class="unresolved-label">Unresolved</div>
+        <div class="unresolved-item">Whether to pursue unsolicited bid if no councillor response — deferred</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Q2 -->
+  <div class="question-block">
+    <div class="question-header">
+      <div class="question-number">Q2</div>
+      <div class="question-text">What is the right pricing for Louie?</div>
+      <div class="question-status status-open">Open</div>
+    </div>
+    <div class="question-body">
+
+      <div class="option-block">
+        <div class="option-label">O1 — $27K setup fee + $9,500 annual</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).1</div>
+          <div class="node-content">Trivial relative to a $1.5B city budget
+            <div class="node-speaker">Paul Winsor · 34:40</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).2</div>
+          <div class="node-content">Comparable to parking tech deals — $12K/year floor, $30–50K for larger cities
+            <div class="node-speaker">Connor McCormick · 35:40</div>
+          </div>
+        </div>
+        <div class="node node-n">
+          <div class="node-tag">N(O1).1</div>
+          <div class="node-content">Not clear cities will see value or that it makes their lives easier
+            <div class="node-speaker">Andrea Gallagher · 34:00</div>
+          </div>
+        </div>
+        <div class="node node-m">
+          <div class="node-tag">M(N(O1).1).1</div>
+          <div class="node-content">Cities often discover surprising pain points when shown the tool
+            <div class="node-speaker">Connor McCormick · 35:00</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="subq-block">
+        <div class="subq-label">Sub-question</div>
+        <div class="subq-text">Will cities actually pay? — Andrea Gallagher · 33:53</div>
+        <div class="subq-answer">Unclear if transparency tools drive hiring or voting decisions — Andrea Gallagher · 34:14</div>
+        <div class="subq-answer">A city manager might use this to make hiring decisions — Andrea Gallagher · 34:18</div>
+      </div>
+
+      <div class="unresolved-block">
+        <div class="unresolved-label">Unresolved</div>
+        <div class="unresolved-item">Value proposition not yet validated with an actual city contact</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Q3 -->
+  <div class="question-block">
+    <div class="question-header">
+      <div class="question-number">Q3</div>
+      <div class="question-text">Should the Negation Game text output be shown to users directly?</div>
+      <div class="question-status status-open">Open</div>
+    </div>
+    <div class="question-body">
+
+      <div class="option-block">
+        <div class="option-label">O1 — Yes — include text output in the UI</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).1</div>
+          <div class="node-content">Could be valuable in itself as a readable artifact
+            <div class="node-speaker">Andrea Gallagher · 8:30</div>
+          </div>
+        </div>
+        <div class="node node-s">
+          <div class="node-tag">S(O1).2</div>
+          <div class="node-content">Inserting it into the demo UI would test whether it adds value
+            <div class="node-speaker">Andrea Gallagher · 8:48</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option-divider"></div>
+
+      <div class="option-block">
+        <div class="option-label">O2 — No — text output alone is too dense</div>
+        <div class="node node-s">
+          <div class="node-tag">S(O2).1</div>
+          <div class="node-content">"To me it's a blizzard of stuff"
+            <div class="node-speaker">Paul Winsor · 9:00</div>
+          </div>
+        </div>
+        <div class="node node-n">
+          <div class="node-tag">N(O2).1</div>
+          <div class="node-content">S/N/M nomenclature is unfamiliar to non-users
+            <div class="node-speaker">Paul Winsor · 10:21</div>
+          </div>
+        </div>
+        <div class="node node-m">
+          <div class="node-tag">M(N(O2).1).1</div>
+          <div class="node-content">Max Gill would understand the content even if not the syntax
+            <div class="node-speaker">Connor McCormick · 10:17</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="subq-block">
+        <div class="subq-label">Sub-question</div>
+        <div class="subq-text">Could a Reddit-style threaded version work instead? — Connor McCormick · 13:59</div>
+        <div class="subq-answer">Reddit threads are not typed positive/negative — loses the S/N/M distinction — Andrea Gallagher · 14:08</div>
+      </div>
+
+      <div class="unresolved-block">
+        <div class="unresolved-label">Unresolved</div>
+        <div class="unresolved-item">No decision on whether or how to surface the text output in the UI</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Q4 -->
+  <div class="question-block">
+    <div class="question-header">
+      <div class="question-number">Q4</div>
+      <div class="question-text">Should Louie compete with procedural meeting software?</div>
+      <div class="question-status status-closed">Closed</div>
+    </div>
+    <div class="question-body">
+
+      <div class="claim-block">Claim: No — stay out of the procedural layer</div>
+
+      <div class="node node-s">
+        <div class="node-tag">S1</div>
+        <div class="node-content">Procedural software companies (10+) are already good and established
+          <div class="node-speaker">Paul Winsor · 30:27</div>
+        </div>
+      </div>
+      <div class="node node-s">
+        <div class="node-tag">S2</div>
+        <div class="node-content">Don't know enough about clerk workflows to compete effectively
+          <div class="node-speaker">Paul Winsor · 30:27</div>
+        </div>
+      </div>
+      <div class="node node-s">
+        <div class="node-tag">S3</div>
+        <div class="node-content">Louie's value starts after the record is entered — complementary not competitive
+          <div class="node-speaker">Paul Winsor · 30:27</div>
+        </div>
+      </div>
+      <div class="node node-n">
+        <div class="node-tag">N1</div>
+        <div class="node-content">Procedural pain is real — software is cheap to build now
+          <div class="node-speaker">Daniel Ospina · 30:13</div>
+        </div>
+      </div>
+      <div class="node node-m">
+        <div class="node-tag">M(N1).1</div>
+        <div class="node-content">Better to integrate with eScribe than replace it
+          <div class="node-speaker">Connor McCormick · 28:32</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Information Items -->
+  <div class="info-section">
+    <div class="info-section-header">
+      <h3>Information Items</h3>
+    </div>
+    <div class="info-section-body">
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>Luis and Connor testing Negation Game embed into external website this afternoon — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Connor McCormick · 1:53</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>Paul's Civic Memory demo shows question history across meetings with dot sizing by frequency — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Paul Winsor · 3:54</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>Argument maps died in mid-2010s because human manual building was too slow — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Andrea Gallagher · 12:00</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>LLMs now make map building essentially zero-time — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Paul Winsor · 12:24</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>Daniel has built an automated WhatsApp/SMS scraper and outreach tool targeting small businesses — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Daniel Ospina · 20:26</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>Granicus is the incumbent vendor in Colorado — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Connor McCormick · 29:05</span></div>
+      </div>
+      <div class="info-section-item">
+        <div class="info-dot">·</div>
+        <div>$27K setup fee partially covers automation of Negation Game map building — <span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">Andrea Gallagher · 7:58</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Unresolved -->
+  <div class="global-unresolved">
+    <div class="global-unresolved-header">
+      <h3>Unresolved Across All Questions</h3>
+    </div>
+    <div class="global-unresolved-body">
+      <div class="global-unresolved-item">
+        <div class="unresolved-num">1</div>
+        <div>Whether to pursue unsolicited bid if no councillor response</div>
+      </div>
+      <div class="global-unresolved-item">
+        <div class="unresolved-num">2</div>
+        <div>Whether and how to surface the S/N/M text output in the UI</div>
+      </div>
+      <div class="global-unresolved-item">
+        <div class="unresolved-num">3</div>
+        <div>Value proposition not yet validated with a real city contact</div>
+      </div>
+      <div class="global-unresolved-item">
+        <div class="unresolved-num">4</div>
+        <div>Colorado go-to-market — different vendor, needs separate approach</div>
+      </div>
+      <div class="global-unresolved-item">
+        <div class="unresolved-num">5</div>
+        <div>Competitive moat — how to prevent competition if Louie takes off (raised, not discussed)</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
