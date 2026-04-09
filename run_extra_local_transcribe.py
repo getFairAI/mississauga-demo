@@ -350,47 +350,86 @@ def run_speaker_pass(job_name: str, raw_transcript: str) -> tuple[str, dict]:
 # ---------------------------------------------------------------------------
 
 
-async def transcribe_full(mp4_path: Path, device: str) -> str:
-    """Transcribe the full MP4 file in one shot with WhisperX."""
+async def _transcribe_full(mp4_path: Path, device: str) -> str:
+    """Transcribe the full MP4 in one shot with WhisperX (no chunking)."""
     from whisperx_transcribe import transcribe_with_whisperx
     return await asyncio.to_thread(transcribe_with_whisperx, mp4_path, device)
 
 
-async def transcribe_chunked_fallback(job_name: str) -> str:
-    """Fall back to the pre-split chunks in ./chunks/<job_name>/."""
+async def transcribe_chunked(job_name: str) -> str:
+    """
+    Transcribe via pre-split chunks in ./chunks/<job_name>/.
+    Saves individual part transcripts to transcriptions/<job_name>_part_*.txt
+    and a naive (0-based) joined file to transcriptions/<job_name>.txt.
+    Call join_and_fix_timestamps() afterwards to correct offsets.
+    """
     chunks_path = CHUNKS / job_name
     if not chunks_path.exists():
         raise FileNotFoundError(
-            f"No chunks found at {chunks_path}. "
-            f"Run split_video.py or create chunks manually."
+            f"No chunks at {chunks_path} — run scripts/split_video.py first."
         )
     from whisperx_transcribe import transcribe_large_file_chunked
     return await transcribe_large_file_chunked(chunks_path)
 
 
-async def transcribe_job(job_name: str, device: str) -> str:
+async def transcribe_full_with_fallback(job_name: str, device: str) -> str:
     """
-    Try full-file transcription; on any failure fall back to chunked.
-    Returns the raw transcript text.
+    Try full-file transcription; fall back to chunked on OOM or any failure.
+    Returns the raw transcript text (timestamps not yet corrected for chunked path).
     """
     mp4_path = ROOT / f"{job_name}.mp4"
-
     if mp4_path.exists():
         print(f"  Attempting full-file transcription of {mp4_path.name}...")
         try:
-            text = await transcribe_full(mp4_path, device)
+            text = await _transcribe_full(mp4_path, device)
             print(f"  Full transcription succeeded ({len(text):,} chars)")
             return text
         except Exception as exc:
             msg = str(exc)
             if "out of memory" in msg.lower() or "cuda" in msg.lower():
-                print(f"  [OOM] GPU out of memory — falling back to chunks")
+                print("  [OOM] GPU out of memory — falling back to chunks")
             else:
-                print(f"  [warn] Full transcription failed: {exc} — falling back to chunks")
+                print(f"  [warn] Full failed ({exc}) — falling back to chunks")
     else:
         print(f"  MP4 not found at {mp4_path} — going straight to chunks")
 
-    return await transcribe_chunked_fallback(job_name)
+    return await transcribe_chunked(job_name)
+
+
+# ---------------------------------------------------------------------------
+# Timestamp join (between pass 1 and pass 2)
+# ---------------------------------------------------------------------------
+
+
+def join_and_fix_timestamps(job_name: str, gap: float = 0.0) -> str | None:
+    """
+    Find the per-chunk transcript files (<job_name>_part_*.txt), apply
+    cumulative time offsets so timestamps are continuous, and overwrite
+    transcriptions/<job_name>.txt with the corrected joined text.
+
+    Returns the fixed text, or None if no part files were found (e.g. the
+    job was transcribed as a single file with no chunking).
+    """
+    import sys as _sys
+    scripts_dir = str(ROOT / "scripts")
+    if scripts_dir not in _sys.path:
+        _sys.path.insert(0, scripts_dir)
+    from scripts.fix_transcript_timestamps import find_part_files, rebuild_from_parts
+
+    final_path = TRANSCRIPTIONS / f"{job_name}.txt"
+    parts = find_part_files(final_path)
+
+    if not parts:
+        print("  [join] No part files found — treating as single-file transcript (timestamps unchanged)")
+        return None
+
+    print(f"  [join] Fixing timestamps across {len(parts)} chunk(s)...")
+    fixed_lines, total_duration = rebuild_from_parts(parts, gap=gap)
+    fixed_text = "\n".join(fixed_lines) + "\n"
+
+    final_path.write_text(fixed_text, encoding="utf-8")
+    print(f"  [join] {len(fixed_lines)} lines  |  ~{total_duration / 60:.1f} min total duration")
+    return fixed_text
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +437,7 @@ async def transcribe_job(job_name: str, device: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def run(jobs: list[str], device: str, speaker_pass: bool):
+async def run(jobs: list[str], device: str, speaker_pass: bool, try_full: bool):
     TRANSCRIPTIONS.mkdir(parents=True, exist_ok=True)
 
     for job_name in jobs:
@@ -409,16 +448,32 @@ async def run(jobs: list[str], device: str, speaker_pass: bool):
         print(f"\n{'─'*60}")
         print(f"Job: {job_name}")
 
-        # ── Pass 1: transcription ──────────────────────────────────────
+        # ── Pass 1: transcription ─────────────────────────────────────
         if raw_out.exists():
             print(f"  [skip] Raw transcript exists: {raw_out.name}")
             raw_text = raw_out.read_text(encoding="utf-8")
         else:
-            raw_text = await transcribe_job(job_name, device)
-            raw_out.write_text(raw_text, encoding="utf-8")
+            if try_full:
+                print("  Mode: full-file (fallback to chunked on failure)")
+                raw_text = await transcribe_full_with_fallback(job_name, device)
+            else:
+                print("  Mode: chunked")
+                raw_text = await transcribe_chunked(job_name)
+
+            # ── Join & fix timestamps (chunked path only) ─────────────
+            # Each chunk starts at 0s; rebuild_from_parts applies cumulative
+            # offsets so the joined transcript has continuous wall-clock times.
+            fixed = join_and_fix_timestamps(job_name)
+            if fixed is not None:
+                raw_text = fixed  # file already overwritten by join step
+
+            # For full-file path (no parts) we still need to write the file.
+            if not raw_out.exists():
+                raw_out.write_text(raw_text, encoding="utf-8")
+
             print(f"  Saved raw transcript → {raw_out.name}")
 
-        # ── Pass 2: speaker name resolution ───────────────────────────
+        # ── Pass 2: speaker name resolution ──────────────────────────
         if not speaker_pass:
             continue
 
@@ -435,11 +490,22 @@ async def run(jobs: list[str], device: str, speaker_pass: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Transcribe meeting recordings and resolve speaker names.\n"
+            "Default: chunked transcription (most reliable on GPU with limited VRAM).\n"
+            "Use --full to attempt single-pass transcription first."
+        )
+    )
     parser.add_argument(
         "--device",
         default="cuda",
         help="WhisperX device: cuda (default) or cpu",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Attempt full-file transcription first; fall back to chunked on failure",
     )
     parser.add_argument(
         "--no-speaker-pass",
@@ -462,7 +528,7 @@ def main():
         print(f"Valid jobs: {JOBS}", file=sys.stderr)
         sys.exit(1)
 
-    asyncio.run(run(jobs, args.device, not args.no_speaker_pass))
+    asyncio.run(run(jobs, args.device, not args.no_speaker_pass, args.full))
 
 
 if __name__ == "__main__":

@@ -28,7 +28,10 @@ def transcribe_with_whisperx(
 
     send("load_model", {"percent": 5, "device": device})
     model_name = "large-v3"
-    model = whisperx.load_model(model_name, device)
+    # Pass language at load time so the tokenizer is built with the correct
+    # language from the start — avoids the "No language specified" warning
+    # that fires when language is only passed to transcribe().
+    model = whisperx.load_model(model_name, device, language="en")
 
     send("load_audio", {"percent": 10})
     audio = whisperx.load_audio(str(audio_path))
