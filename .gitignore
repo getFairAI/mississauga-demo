@@ -6,3 +6,4 @@ transcriptions/
 .env
 *.mp4
 parts/
+.browser_profile/

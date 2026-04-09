@@ -316,14 +316,26 @@ def _next_argument_map_version(transcript_path: Path) -> int:
 
 
 def _resolve_transcript_path(transcript_id: str) -> Path:
-    """Return the path for a given transcript id or raise 404."""
-    candidate = TRANSCRIPTS_DIR / transcript_id
-    if candidate.suffix != ".txt":
-        candidate_with_ext = TRANSCRIPTS_DIR / f"{transcript_id}.txt"
-        if candidate_with_ext.exists():
-            return candidate_with_ext
-    if candidate.exists():
-        return candidate
+    """
+    Return the path for a given transcript id or raise 404.
+    Prefers the _named.txt version (resolved speaker names) over the raw .txt.
+    """
+    # Normalise to a stem (strip .txt suffix if present)
+    stem = transcript_id
+    if stem.endswith(".txt"):
+        stem = stem[:-4]
+    # Strip _named suffix so we always look up by base stem
+    if stem.endswith("_named"):
+        stem = stem[:-6]
+
+    named = TRANSCRIPTS_DIR / f"{stem}_named.txt"
+    if named.exists():
+        return named
+
+    base = TRANSCRIPTS_DIR / f"{stem}.txt"
+    if base.exists():
+        return base
+
     raise HTTPException(status_code=404, detail="Transcript not found.")
 
 
@@ -1056,27 +1068,45 @@ async def broadcast(room_id: str, payload: BroadcastRequest) -> dict:
 
 @app.get("/transcriptions")
 async def list_transcriptions() -> dict:
-    """Return available transcript files with basic metadata."""
-    items = []
+    """Return available transcript files with basic metadata.
+
+    For each job, prefers the _named.txt (resolved speaker names) over the
+    raw .txt. _named, _summary, _part, and _speakers sidecar files are not
+    listed as separate entries.
+    """
+    # Build a dict keyed by base stem → best path (named beats raw)
+    best: dict[str, Path] = {}
+    _skip = re.compile(r"(_summary(_v\d+)?|_argument_map.*|_speakers)$")
     if TRANSCRIPTS_DIR.exists():
         for path in sorted(TRANSCRIPTS_DIR.glob("*.txt")):
-            # Skip generated summary files (e.g., foo_summary.txt) to avoid double-counting.
-            if re.search(r"_summary(_v\d+)?$", path.stem) or path.stem.find("_part") != -1:
+            stem = path.stem
+            if _skip.search(stem) or "_part" in stem:
                 continue
-            lines, topic = parse_transcript_file(path)
-            duration = lines[-1].end if lines else None
-            argument_map_path = path.with_name(f"{path.stem}_argument_map.json")
-            items.append(
-                {
-                    "id": path.name,
-                    "title": path.stem,
-                    "topic": topic,
-                    "line_count": len(lines),
-                    "duration": duration,
-                    "argument_map_file": argument_map_path.name if argument_map_path.exists() else None,
-                    "has_argument_map": argument_map_path.exists(),
-                }
-            )
+            if stem.endswith("_named"):
+                base = stem[:-6]
+                best[base] = path          # named always wins
+            else:
+                if stem not in best:
+                    best[stem] = path      # only use raw if no named exists
+
+    items = []
+    for base_stem, path in sorted(best.items()):
+        lines, topic = parse_transcript_file(path)
+        duration = lines[-1].end if lines else None
+        # Argument map is keyed to the base stem
+        arg_map = TRANSCRIPTS_DIR / f"{base_stem}_argument_map.json"
+        items.append(
+            {
+                "id": base_stem + ".txt",   # stable ID always uses base stem
+                "title": base_stem,
+                "topic": topic,
+                "line_count": len(lines),
+                "duration": duration,
+                "named": path.stem.endswith("_named"),
+                "argument_map_file": arg_map.name if arg_map.exists() else None,
+                "has_argument_map": arg_map.exists(),
+            }
+        )
     return {"items": items}
 
 
@@ -1555,91 +1585,88 @@ async def assistant(
 ):
     try:
         if not question or not str(question).strip():
-            raise HTTPException(
-                status_code=400,
-                detail="No question received.",
-            )
+            raise HTTPException(status_code=400, detail="No question received.")
 
         question = question.strip()
 
-        transcripts_dir = Path("./transcriptions/")  # point this to your folder
+        # ── Retrieve relevant chunks from RAG ────────────────────────────
+        from rag import get_rag
+        rag = get_rag()
 
-        transcript_blocks = []
-        for f in sorted(transcripts_dir.rglob("*.txt")):
-            if f.stem.endswith("_summary") or f.stem.find("_part") != -1:
-                print("Skipping non-transcript files")
-                continue
-            
-            full_text = f.read_text(encoding="utf-8")
-           
-            if not full_text.strip():
-                continue
-            transcript_blocks.append({
-                "transcriptID": f.name,              # keep field name; value is filename
-                "title": f.stem,                 # keep field; use stem as a friendly title
-                "text": full_text,
-            })
-
-        if not transcript_blocks:
+        if rag.count() == 0:
+            # RAG index empty — fall back to a helpful message
             return {
                 "type": "text",
-                "answer": "There are no reports with content yet.",
+                "answer": (
+                    "The knowledge base is empty. "
+                    "Run `python scripts/build_rag.py` to index meeting content."
+                ),
                 "sources": [],
             }
 
-        blocks_txt = ""
-        for i, rb in enumerate(transcript_blocks, start=1):
-            blocks_txt += (
-                f"\n[TRANSCRIPT {i}]\n"
-                f"ID: {rb['transcriptID']}\n"
-                f"TITLE: {rb['title']}\n"
-                f"TEXTO:\n{rb['text']}\n"
-            )
+        results = await asyncio.to_thread(rag.search, question, 14)
+        context_block = rag.format_context(results)
 
+        # Build source list (deduplicated by file)
+        seen_files: set[str] = set()
+        sources = []
+        for r in results:
+            m = r["meta"]
+            f = m.get("file", "")
+            if f and f not in seen_files:
+                seen_files.add(f)
+                sources.append({
+                    "reportId": f,
+                    "title": (
+                        f"{m.get('committee', '')} — "
+                        f"{m.get('date', '')} "
+                        f"({m.get('source_type', '')}): "
+                        f"{m.get('document_title', '')}"
+                    ).strip(" —():"),
+                })
+
+        # ── LLM call ─────────────────────────────────────────────────────
         system_msg = (
-            "You are a technical assistant in a live demonstration.\n"
-            "The goal is to always help the user.\n"
-            "ALWAYS return valid JSON.\n\n"
+            "You are a civic assistant for the City of Mississauga.\n"
+            "Answer questions using ONLY the retrieved meeting content provided below.\n"
+            "ALWAYS return valid JSON in one of the two formats shown.\n\n"
+
             "Rules:\n"
-            "- Use the provided transcripts as context whenever it makes sense.\n"
-            "- Each transcript file contains multiple lines like '[start–end] Speaker X: ...'.\n"
-            "- If the question asks for comparison, ranking, top, percentages, or trends, generate a chart.\n"
-            "- Charts are mostly for demonstration purposes (show off).\n"
-            "- When generating a chart:\n"
-            "  • use plausible and coherent values (integers > 0)\n"
-            "  • use fictitious company names\n"
-            "  • include 'sources' **only if** the chart is clearly based on real data from the transcripts\n"
-            "- If the chart is purely demonstrative, DO NOT include 'sources'.\n"
-            "- For text-only answers, you may include 'sources' when it makes sense.\n"
-            "- Never include sources without a clear relation to the answer.\n\n"
-            "For demonstrative charts, use only these fictitious company names (vary as needed):\n"
-            "MG Solutions, LS Market, Ferreira LDA, Fraga Norte, InTeck\n\n"
-            "Possible formats:\n"
-            "Text:\n"
-            "{\"type\":\"text\",\"answer\":\"...markdown...\",\"sources\":[{\"reportId\":\"...\",\"title\":\"...\"}]}\n\n"
-            "Chart:\n"
-            "{\"type\":\"chart\",\"answer\":\"optional intro text\","
-            "\"chart\":{\"type\":\"bar|line|pie\",\"data\":[{\"name\":\"Company\",\"value\":10}]}"
-            "[, \"sources\":[{\"reportId\":\"...\",\"title\":\"...\"}]]}"
+            "- Ground every claim in the provided sources. Do not invent facts.\n"
+            "- Speaker names in transcripts are real people from Mississauga committees.\n"
+            "- If the question asks for comparison, ranking, percentages, or trends "
+            "  AND the data supports it, generate a chart.\n"
+            "- For text answers, cite the relevant source numbers (e.g. [SOURCE 3]).\n"
+            "- Include 'sources' only when directly relevant to the answer.\n\n"
+
+            "Response formats:\n"
+            "Text:  {\"type\":\"text\",\"answer\":\"...markdown...\","
+            "\"sources\":[{\"reportId\":\"path\",\"title\":\"label\"}]}\n\n"
+            "Chart: {\"type\":\"chart\",\"answer\":\"optional intro\","
+            "\"chart\":{\"type\":\"bar|line|pie\","
+            "\"data\":[{\"name\":\"Label\",\"value\":42}]},"
+            "\"sources\":[...]}"
         )
 
-
-        user_msg = f"REPORTS:\n{blocks_txt}\n\nQUESTION:\n{question}"
+        user_msg = (
+            f"RETRIEVED MEETING CONTENT:\n{context_block}\n\n"
+            f"QUESTION:\n{question}"
+        )
 
         raw = ai_call(
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
-            temperature=0.3,
+            temperature=0.2,
             json_mode=True,
         ).strip()
 
         try:
             payload = json.loads(raw)
         except Exception:
-            m = re.search(r"\{[\s\S]*\}$", raw)
-            payload = json.loads(m.group(0)) if m else {
+            m_match = re.search(r"\{[\s\S]*\}$", raw)
+            payload = json.loads(m_match.group(0)) if m_match else {
                 "type": "text",
                 "answer": raw,
                 "sources": [],
@@ -1655,17 +1682,15 @@ async def assistant(
                 except Exception:
                     val = random.randint(1, 10)
                 norm.append({"name": str(d.get("name")), "value": val})
-            payload["chart"] = {
-                "type": chart.get("type") or "bar",
-                "data": norm,
-            }
+            payload["chart"] = {"type": chart.get("type") or "bar", "data": norm}
 
-        seen = set()
+        # Merge RAG sources with any LLM-generated sources, deduplicated
+        seen_ids: set[str] = set()
         clean_sources = []
-        for s in payload.get("sources", []):
+        for s in sources + payload.get("sources", []):
             rid = s.get("reportId")
-            if rid and rid not in seen:
-                seen.add(rid)
+            if rid and rid not in seen_ids:
+                seen_ids.add(rid)
                 clean_sources.append(s)
 
         payload["sources"] = clean_sources
@@ -1675,10 +1700,7 @@ async def assistant(
         raise
     except Exception as e:
         print("❌ ERRO /assistant:", e)
-        raise HTTPException(
-            status_code=500,
-            detail="Assistant error.",
-        )
+        raise HTTPException(status_code=500, detail="Assistant error.")
 
 
 

@@ -3,20 +3,24 @@ run_extra_local_transcribe.py
 -----------------------------
 Enhanced transcription pipeline:
 
-  Pass 1 – Transcription
-    Attempts to transcribe each MP4 as a single file (no chunking).
-    Falls back to the existing chunked path on OOM or any failure.
+  Pass 1 – Transcription (always WhisperX / local GPU)
+    Default: chunked transcription via pre-split chunks in ./chunks/<job>/.
+    --full: attempts single-file transcription first, falls back to chunked.
 
-  Pass 2 – Speaker name resolution
-    Loads agenda / minutes PDFs linked to the meeting via council_index.json,
-    extracts text, and uses an LLM to replace generic SPEAKER_XX labels with
-    real names from the meeting documents.
+  Pass 2 – Speaker name resolution (LLM)
+    Loads agenda / minutes PDFs from council_index.json, extracts attendees,
+    and maps SPEAKER_XX labels to real names using an LLM.
+
+    LLM routing (via ai_utils):
+      OPENAI_API_KEY set  → OpenAI ChatGPT (model from OPENAI_MODEL, default gpt-4.1)
+      OPENAI_API_KEY unset → Ollama local (model from OLLAMA_MODEL, default qwen3:30b)
 
 Usage
 -----
     python run_extra_local_transcribe.py
     python run_extra_local_transcribe.py --device cpu
     python run_extra_local_transcribe.py --no-speaker-pass
+    python run_extra_local_transcribe.py --full
     python run_extra_local_transcribe.py --job road_safety_comittee_2026_03_24
 
 Output
@@ -29,12 +33,15 @@ Output
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+from ai_utils import ai_call  # noqa: E402  (after load_dotenv so env vars are set)
 
 ROOT = Path(__file__).parent
 CHUNKS = ROOT / "chunks"
@@ -225,8 +232,6 @@ def extract_attendees(context: str) -> str:
     Ask the LLM to extract a structured attendee list from the PDF context.
     Returns a plain-text summary of who was at the meeting.
     """
-    from ai_utils import ai_call
-
     prompt = (
         "You are reading agenda and/or minutes documents for a City of Mississauga "
         "committee meeting. Extract a list of all named people at this meeting:\n"
@@ -245,6 +250,28 @@ def extract_attendees(context: str) -> str:
     return ai_call([{"role": "user", "content": prompt}], temperature=0.0)
 
 
+def _extract_json(text: str) -> str:
+    """
+    Robustly extract a JSON object from LLM output that may contain:
+      - <think>...</think> reasoning blocks (qwen3 / deepseek)
+      - Markdown code fences: ```json ... ```
+      - Preamble text before the first {
+    Returns the raw text unchanged if no braces are found (lets json.loads raise).
+    """
+    # Strip thinking blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # Strip markdown code fences
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        return m.group(1)
+    # Find first { ... last }
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start: end + 1]
+    return text
+
+
 def build_speaker_mapping(raw_transcript: str, attendees: str) -> dict[str, str]:
     """
     Ask the LLM to map SPEAKER_XX labels to real names.
@@ -257,8 +284,6 @@ def build_speaker_mapping(raw_transcript: str, attendees: str) -> dict[str, str]
       3. Opening lines — roll call, chair opening, first remarks
       4. Mid-meeting sample — catches latecomers and transitions
     """
-    from ai_utils import ai_call
-
     parsed = _parse_lines(raw_transcript)
     half = SPEAKER_SAMPLE_LINES // 2
 
@@ -312,10 +337,10 @@ def build_speaker_mapping(raw_transcript: str, attendees: str) -> dict[str, str]
 
     raw = ai_call([{"role": "user", "content": prompt}], temperature=0.0, json_mode=True)
     try:
-        mapping = json.loads(raw)
+        mapping = json.loads(_extract_json(raw))
         return {k: v for k, v in mapping.items() if re.match(r"SPEAKER_\d+", k)}
-    except (json.JSONDecodeError, AttributeError):
-        print("  [warn] LLM returned invalid JSON for speaker mapping")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        print(f"  [warn] LLM returned invalid JSON for speaker mapping. Raw output (first 500 chars):\n{raw[:500]}")
         return {}
 
 
@@ -337,7 +362,12 @@ def run_speaker_pass(job_name: str, raw_transcript: str) -> tuple[str, dict]:
     Full speaker identification pipeline for one job.
     Returns (named_transcript, speaker_mapping).
     """
-    print(f"\n  [speaker-pass] Loading meeting context for '{job_name}'...")
+    if os.getenv("OPENAI_API_KEY"):
+        llm_backend = f"OpenAI ({os.getenv('OPENAI_MODEL', 'gpt-4.1')})"
+    else:
+        llm_backend = f"Ollama ({os.getenv('OLLAMA_MODEL', 'qwen3:30b')})"
+    print(f"\n  [speaker-pass] LLM backend: {llm_backend}")
+    print(f"  [speaker-pass] Loading meeting context for '{job_name}'...")
     context = load_meeting_context(job_name)
 
     if context.strip():
