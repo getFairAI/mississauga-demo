@@ -109,6 +109,23 @@ def ai_call(
     return completion.choices[0].message.content
 
 
+async def transcribe_file(file_path, device: str = "cuda") -> str:
+    """
+    Transcribe a single audio/video file without chunking.
+    Routes to WhisperX (local) or OpenAI depending on OPENAI_API_KEY.
+    Raises on failure so the caller can fall back to chunking.
+    """
+    if os.getenv("OPENAI_API_KEY"):
+        from openai_transcribe import openai_stream_transcribe
+        from pathlib import Path
+        return await openai_stream_transcribe(Path(file_path))
+    else:
+        from whisperx_transcribe import transcribe_with_whisperx
+        import asyncio
+        from pathlib import Path
+        return await asyncio.to_thread(transcribe_with_whisperx, Path(file_path), device)
+
+
 async def transcribe_chunks(chunks_path) -> str:
     """Route chunked audio transcription to OpenAI or local WhisperX.
 
