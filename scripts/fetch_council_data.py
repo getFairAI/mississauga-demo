@@ -115,9 +115,15 @@ def parse_date(text: str) -> tuple[str, str]:
 def classify_pdf(text: str) -> str:
     """Return 'minutes', 'agenda', or 'attachment' based on link text."""
     t = text.lower()
-    if "minute" in t:
+    # Minutes variants — check before agenda to catch "agenda & minutes" edge case
+    if any(kw in t for kw in ("minute", "approved minutes", "draft minutes",
+                               "confirmed minutes", "meeting record")):
         return "minutes"
-    if "agenda" in t:
+    # Agenda variants
+    if any(kw in t for kw in ("agenda", "post-agenda", "post agenda",
+                               "pre-agenda", "pre agenda", "consolidated agenda",
+                               "order of business", "order paper",
+                               "notice of meeting", "council agenda")):
         return "agenda"
     return "attachment"
 
@@ -140,15 +146,25 @@ def match_mp4_to_meeting(mp4: Path, committee: str, date_iso: str) -> bool:
     """
     True when the MP4 belongs to this committee on this date.
     Matches committee keywords AND YYYY_MM_DD in filename.
+
+    Uses whole-date patterns (e.g. 2026_01_20) rather than checking each
+    component separately — avoids the false positive where day "20" matches
+    inside the year string "2026".
     """
     name = mp4.stem.lower()
 
-    # Date check: require year, month, day all present
+    # Date check: look for the full date as a unit with any separator
     if date_iso:
         parts = date_iso.split("-")
         if len(parts) == 3:
             yyyy, mm, dd = parts
-            if yyyy not in name or mm not in name or dd not in name:
+            date_patterns = [
+                f"{yyyy}_{mm}_{dd}",
+                f"{yyyy}{mm}{dd}",
+                f"{yyyy}-{mm}-{dd}",
+                f"{yyyy}.{mm}.{dd}",
+            ]
+            if not any(pat in name for pat in date_patterns):
                 return False
 
     # Committee keyword check
@@ -293,52 +309,75 @@ def scrape_committee_meetings(
         title = meeting["title"]
         print(f"\n  ── {title[:65]}")
 
-        agenda_url = (
-            f"{ESCRIBE_BASE}/Meeting.aspx?Id={meeting_id}"
-            f"&Agenda=Agenda&lang=English"
-        )
+        # Views to check, in priority order:
+        # &Agenda=Agenda  – standard agenda view
+        # &Agenda=Merged  – merged / revised / post-agenda view (used by some committees)
+        # (no Agenda param) – base meeting overview page (may list minutes separately)
+        agenda_views = [
+            ("Agenda", f"{ESCRIBE_BASE}/Meeting.aspx?Id={meeting_id}&Agenda=Agenda&lang=English"),
+            ("Merged", f"{ESCRIBE_BASE}/Meeting.aspx?Id={meeting_id}&Agenda=Merged&lang=English"),
+            ("Overview", f"{ESCRIBE_BASE}/Meeting.aspx?Id={meeting_id}&lang=English"),
+        ]
+        agenda_url = agenda_views[0][1]  # keep first for record
 
-        try:
-            page.goto(agenda_url, timeout=60_000, wait_until="domcontentloaded")
-            try:
-                page.wait_for_load_state("networkidle", timeout=5_000)
-            except Exception:
-                pass
-        except Exception as exc:
-            print(f"    [warn] Failed to load: {exc}", file=sys.stderr)
-            results.append({**meeting, "error": str(exc)})
-            continue
-
-        # Parse date from page
+        all_raw_links: list[dict] = []
         date_iso, date_text = "", ""
-        for sel in ["h1", "h2", ".pageTitle", ".headerTitle", "title"]:
+
+        for view_name, view_url in agenda_views:
             try:
-                el = page.query_selector(sel)
-                if el:
-                    date_iso, date_text = parse_date(el.inner_text())
-                    if date_iso:
-                        break
-            except Exception:
-                pass
+                page.goto(view_url, timeout=60_000, wait_until="domcontentloaded")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5_000)
+                except Exception:
+                    pass
+            except Exception as exc:
+                print(f"    [warn] {view_name}: Failed to load: {exc}", file=sys.stderr)
+                continue
+
+            # Parse date (only need to find it once)
+            if not date_iso:
+                for sel in ["h1", "h2", ".pageTitle", ".headerTitle", "title"]:
+                    try:
+                        el = page.query_selector(sel)
+                        if el:
+                            date_iso, date_text = parse_date(el.inner_text())
+                            if date_iso:
+                                break
+                    except Exception:
+                        pass
+
+            # Collect all filestream links from this view
+            raw_links = page.query_selector_all("a[href*='filestream.ashx']")
+            view_links: list[dict] = []
+            for a in raw_links:
+                href = a.get_attribute("href") or ""
+                text = (a.inner_text().strip() or a.get_attribute("title") or "").strip()
+                full = urljoin(ESCRIBE_BASE, href)
+                view_links.append({"text": text, "url": full, "view": view_name})
+            all_raw_links.extend(view_links)
+            print(f"    [{view_name}] {len(view_links)} file links found"
+                  + (f": {[l['text'] for l in view_links[:5]]}" if view_links else ""))
 
         # Skip if date is outside the target year
         if date_iso and not date_iso.startswith(str(year)):
             print(f"    [skip] date {date_iso} outside {year}")
             continue
 
-        # Collect filestream PDF links and classify each
-        raw_links = page.query_selector_all("a[href*='filestream.ashx']")
+        # Classify and dedup links across all views
         pdf_links: list[dict] = []
-        for a in raw_links:
-            href = a.get_attribute("href") or ""
-            text = (a.inner_text().strip() or a.get_attribute("title") or "").strip()
-            full = urljoin(ESCRIBE_BASE, href)
+        for lnk in all_raw_links:
             pdf_links.append({
-                "text": text,
-                "url": full,
-                "type": classify_pdf(text),
+                "text": lnk["text"],
+                "url": lnk["url"],
+                "type": classify_pdf(lnk["text"]),
+                "view": lnk["view"],
             })
         pdf_links = dedup_links(pdf_links)
+
+        # Debug: show any links still falling through as "attachment"
+        unclassified = [l for l in pdf_links if l["type"] == "attachment"]
+        if unclassified:
+            print(f"    [debug] attachment label texts: {[l['text'] for l in unclassified[:8]]}")
 
         by_type: dict[str, list[dict]] = {"agenda": [], "minutes": [], "attachment": []}
         for lnk in pdf_links:

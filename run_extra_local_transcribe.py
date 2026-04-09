@@ -93,19 +93,33 @@ def load_meeting_context(job_name: str) -> str:
         return ""
 
     index = json.loads(COUNCIL_INDEX.read_text())
-    mp4_rel = f"{job_name}.mp4"  # relative path stored in index
+
+    # Derive date and committee from the job name — more reliable than
+    # trusting the mp4_files associations in the index (which can be wrong).
+    # Job name format: budget_2026_01_12_09_30 / road_safety_comittee_2026_03_24
+    date_m = re.search(r"(\d{4})[_-](\d{2})[_-](\d{2})", job_name)
+    date_iso = f"{date_m.group(1)}-{date_m.group(2)}-{date_m.group(3)}" if date_m else ""
+
+    name_lower = job_name.lower()
+    if "budget" in name_lower:
+        committee_kw = "budget"
+    elif "road" in name_lower:
+        committee_kw = "road"
+    elif "discrimination" in name_lower:
+        committee_kw = "discrimination"
+    else:
+        committee_kw = ""
 
     matched_meeting = None
     for meeting in index.get("meetings", []):
-        for mp4 in meeting.get("mp4_files", []):
-            if Path(mp4).name == Path(mp4_rel).name:
-                matched_meeting = meeting
-                break
-        if matched_meeting:
+        date_ok = (not date_iso) or meeting.get("date", "") == date_iso
+        comm_ok = (not committee_kw) or committee_kw in meeting.get("committee", "").lower()
+        if date_ok and comm_ok:
+            matched_meeting = meeting
             break
 
     if not matched_meeting:
-        print(f"  [warn] No meeting in index matched MP4 '{mp4_rel}'")
+        print(f"  [warn] No meeting matched date={date_iso} committee_kw={committee_kw!r}")
         return ""
 
     committee = matched_meeting.get("committee", "")
@@ -114,24 +128,27 @@ def load_meeting_context(job_name: str) -> str:
     print(f"  Matched meeting: {title} ({date})")
 
     pdfs = matched_meeting.get("pdfs", {})
-    all_pdf_paths = (
-        pdfs.get("agenda", [])
-        + pdfs.get("minutes", [])
-        + pdfs.get("attachments", [])
-    )
+    # Only use minutes + agenda — they contain attendee lists.
+    # Attachments (e.g. budget presentations) contain no names and confuse the LLM.
+    attendee_pdf_paths = pdfs.get("minutes", []) + pdfs.get("agenda", [])
 
-    if not all_pdf_paths:
-        print("  [warn] No PDFs linked to this meeting in the index")
+    if not attendee_pdf_paths:
+        print("  [info] No minutes/agenda PDFs linked — speaker pass will rely on announcement patterns only")
         return ""
 
+    # Limit to 2 000 chars per doc — attendee/cover info is always near the top.
     sections = [f"Meeting: {title}\nDate: {date}\nCommittee: {committee}\n"]
-    for rel_path in all_pdf_paths:
+    for rel_path in attendee_pdf_paths:
         pdf_path = ROOT / rel_path
         if not pdf_path.exists():
             continue
-        text = extract_pdf_text(pdf_path)
+        text = extract_pdf_text(pdf_path, max_chars=2_000)
         if text.strip():
             sections.append(f"\n--- {pdf_path.name} ---\n{text}")
+
+    if len(sections) == 1:
+        print("  [warn] No PDF text could be extracted")
+        return ""
 
     return "\n".join(sections)
 
@@ -323,13 +340,13 @@ def run_speaker_pass(job_name: str, raw_transcript: str) -> tuple[str, dict]:
     print(f"\n  [speaker-pass] Loading meeting context for '{job_name}'...")
     context = load_meeting_context(job_name)
 
-    if not context.strip():
-        print("  [speaker-pass] No context available — skipping name resolution")
-        return raw_transcript, {}
-
-    print("  [speaker-pass] Extracting attendee list from documents...")
-    attendees = extract_attendees(context)
-    print(f"  [speaker-pass] Attendees:\n{attendees}\n")
+    if context.strip():
+        print("  [speaker-pass] Extracting attendee list from documents...")
+        attendees = extract_attendees(context)
+        print(f"  [speaker-pass] Attendees:\n{attendees}\n")
+    else:
+        print("  [speaker-pass] No document context — relying on transcript announcement patterns only")
+        attendees = ""
 
     print("  [speaker-pass] Building speaker mapping...")
     mapping = build_speaker_mapping(raw_transcript, attendees)
