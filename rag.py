@@ -68,11 +68,27 @@ class MeetingRAG:
         persist_dir.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(persist_dir))
         self._ef = _make_embedding_fn()
-        self.collection = self.client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=self._ef,
-            metadata={"hnsw:space": "cosine"},
-        )
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                embedding_function=self._ef,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception as e:
+            if "embedding function" in str(e).lower() and "conflict" in str(e).lower():
+                print(
+                    f"[rag] Embedding function changed — dropping and recreating collection "
+                    f"(was: persisted config, now: {type(self._ef).__name__}). "
+                    f"Run `python scripts/build_rag.py --reset` to re-index."
+                )
+                self.client.delete_collection(COLLECTION_NAME)
+                self.collection = self.client.get_or_create_collection(
+                    name=COLLECTION_NAME,
+                    embedding_function=self._ef,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            else:
+                raise
 
     # ── Write ──────────────────────────────────────────────────────────────
 
