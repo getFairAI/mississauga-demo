@@ -21,6 +21,9 @@ import json
 import re
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Project root (one level up from scripts/)
 ROOT = Path(__file__).parent.parent
@@ -296,6 +299,9 @@ def index_pdfs(rag: MeetingRAG, meetings: dict[str, dict]) -> int:
 
     total = 0
     for entry in manifest:
+        if entry.get("type") == "attachment":
+            continue  # attachments are not indexed — transcripts are the evidence
+
         pdf_path = ROOT / entry["file"]
         if not pdf_path.exists():
             print(f"  [skip] missing: {entry['file']}")

@@ -12,7 +12,7 @@ Enhanced transcription pipeline:
     and maps SPEAKER_XX labels to real names using an LLM.
 
     LLM routing (via ai_utils):
-      OPENAI_API_KEY set  → OpenAI ChatGPT (model from OPENAI_MODEL, default gpt-4.1)
+      OPENAI_API_KEY set  → OpenAI ChatGPT (model from OPENAI_MODEL, default gpt-5.4-mini)
       OPENAI_API_KEY unset → Ollama local (model from OLLAMA_MODEL, default qwen3:30b)
 
 Usage
@@ -363,7 +363,7 @@ def run_speaker_pass(job_name: str, raw_transcript: str) -> tuple[str, dict]:
     Returns (named_transcript, speaker_mapping).
     """
     if os.getenv("OPENAI_API_KEY"):
-        llm_backend = f"OpenAI ({os.getenv('OPENAI_MODEL', 'gpt-4.1')})"
+        llm_backend = f"OpenAI ({os.getenv('OPENAI_MODEL', 'gpt-5.4-mini')})"
     else:
         llm_backend = f"Ollama ({os.getenv('OLLAMA_MODEL', 'qwen3:30b')})"
     print(f"\n  [speaker-pass] LLM backend: {llm_backend}")

@@ -1604,13 +1604,19 @@ async def assistant(
                 "sources": [],
             }
 
-        results = await asyncio.to_thread(rag.search, question, 14)
-        context_block = rag.format_context(results)
+        # Stage 1: semantic search over transcripts only (primary evidence)
+        transcript_results = await asyncio.to_thread(rag.search_transcripts, question, 12)
 
-        # Build source list (deduplicated by file)
+        # Stage 2: fetch agenda/minutes for the matched meetings (supporting context)
+        meeting_ids = list({r["meta"].get("meeting_id", "") for r in transcript_results})
+        doc_results = await asyncio.to_thread(rag.get_meeting_documents, meeting_ids)
+
+        context_block = rag.format_context(transcript_results, doc_results)
+
+        # Sources are transcripts only — that's what the answer is grounded in
         seen_files: set[str] = set()
         sources = []
-        for r in results:
+        for r in transcript_results:
             m = r["meta"]
             f = m.get("file", "")
             if f and f not in seen_files:
@@ -1620,7 +1626,7 @@ async def assistant(
                     "title": (
                         f"{m.get('committee', '')} — "
                         f"{m.get('date', '')} "
-                        f"({m.get('source_type', '')}): "
+                        f"(transcript): "
                         f"{m.get('document_title', '')}"
                     ).strip(" —():"),
                 })
@@ -1628,18 +1634,26 @@ async def assistant(
         # ── LLM call ─────────────────────────────────────────────────────
         system_msg = (
             "You are a civic assistant for the City of Mississauga.\n"
-            "Answer questions using ONLY the retrieved meeting content provided below.\n"
-            "ALWAYS return valid JSON in one of the two formats shown.\n\n"
+            "You have access to transcripts of committee meetings and supporting "
+            "agenda/minutes documents.\n\n"
 
-            "Rules:\n"
-            "- Ground every claim in the provided sources. Do not invent facts.\n"
-            "- Speaker names in transcripts are real people from Mississauga committees.\n"
-            "- If the question asks for comparison, ranking, percentages, or trends "
-            "  AND the data supports it, generate a chart.\n"
-            "- For text answers, cite the relevant source numbers (e.g. [SOURCE 3]).\n"
-            "- Include 'sources' only when directly relevant to the answer.\n\n"
+            "CONTENT STRUCTURE:\n"
+            "- [SOURCE N] blocks are transcript excerpts — verbatim spoken record. "
+            "These are your primary evidence. Cite them directly.\n"
+            "- [DOC N] blocks are agenda or minutes — use them only to provide "
+            "context (names, dates, agenda items) or to filter/clarify transcript evidence. "
+            "Do not cite them as primary evidence for what was said.\n\n"
 
-            "Response formats:\n"
+            "RULES:\n"
+            "- Base every factual claim on a [SOURCE N] transcript excerpt.\n"
+            "- Quote speakers accurately. Names in transcripts are real Mississauga "
+            "committee members and staff.\n"
+            "- If information is not in the provided sources, say so — do not invent.\n"
+            "- Cite relevant source numbers inline (e.g. [SOURCE 2]).\n"
+            "- If the question asks for comparisons, trends, or numerical data "
+            "AND the sources support it, return a chart instead of text.\n\n"
+
+            "ALWAYS return valid JSON in exactly one of these formats:\n\n"
             "Text:  {\"type\":\"text\",\"answer\":\"...markdown...\","
             "\"sources\":[{\"reportId\":\"path\",\"title\":\"label\"}]}\n\n"
             "Chart: {\"type\":\"chart\",\"answer\":\"optional intro\","
@@ -1649,8 +1663,8 @@ async def assistant(
         )
 
         user_msg = (
-            f"RETRIEVED MEETING CONTENT:\n{context_block}\n\n"
-            f"QUESTION:\n{question}"
+            f"RETRIEVED CONTENT:\n{context_block}\n\n"
+            f"QUESTION: {question}"
         )
 
         raw = ai_call(

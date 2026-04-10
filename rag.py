@@ -3,17 +3,23 @@ rag.py
 ------
 Core RAG module for Mississauga civic meeting content.
 
-Wraps ChromaDB with an embedding function that routes to:
-  - OpenAI text-embedding-3-small  (when OPENAI_API_KEY is set)
-  - sentence-transformers all-MiniLM-L6-v2  (local fallback)
+Wraps ChromaDB with OpenAI text-embedding-3-small embeddings.
+
+Retrieval strategy
+------------------
+  Transcripts are the primary evidence — search_transcripts() does semantic
+  search restricted to source_type="transcript".
+  Agenda/minutes are supporting context — get_meeting_documents() fetches
+  them by meeting_id after the transcript search, not by semantic ranking.
+  Attachments are never indexed.
 
 Collections
 -----------
-  meetings  –  all chunks from transcripts + PDFs, with rich metadata.
+  meetings  –  transcript chunks + agenda/minutes chunks, with rich metadata.
 
 Metadata schema (every chunk has all fields)
 ----------------------------------------------
-  source_type    : "transcript" | "agenda" | "minutes" | "attachment"
+  source_type    : "transcript" | "agenda" | "minutes"
   committee      : "Budget Committee" | "Road Safety Committee" | ...
   meeting_id     : GUID from Escribe
   meeting_title  : human-readable title
@@ -107,8 +113,8 @@ class MeetingRAG:
         where: dict | None = None,
     ) -> list[dict]:
         """
-        Semantic search. Returns list of dicts with keys:
-          text, meta, distance (lower = more similar for cosine).
+        Semantic search across all indexed content.
+        Returns list of dicts: text, meta, distance.
         """
         kwargs: dict[str, Any] = {
             "query_texts": [query],
@@ -117,51 +123,126 @@ class MeetingRAG:
         }
         if where:
             kwargs["where"] = where
-
         results = self.collection.query(**kwargs)
         out = []
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        dists = results["distances"][0]
-        for doc, meta, dist in zip(docs, metas, dists):
+        for doc, meta, dist in zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ):
             out.append({"text": doc, "meta": meta, "distance": dist})
         return out
 
-    def format_context(self, results: list[dict], max_chars: int = 12_000) -> str:
+    def search_transcripts(
+        self,
+        query: str,
+        n_results: int = 12,
+        where: dict | None = None,
+    ) -> list[dict]:
         """
-        Format search results into a structured context block for the LLM.
+        Primary retrieval — semantic search restricted to transcript chunks only.
+        Transcripts are the ground-truth evidence; agenda/minutes are supporting.
+        Additional `where` filters are ANDed with the transcript filter.
         """
-        parts = []
+        transcript_filter: dict = {"source_type": "transcript"}
+        combined = (
+            {"$and": [transcript_filter, where]} if where else transcript_filter
+        )
+        return self.search(query, n_results, where=combined)
+
+    def get_meeting_documents(self, meeting_ids: list[str]) -> list[dict]:
+        """
+        Fetch all agenda + minutes chunks for the given meeting IDs by metadata
+        filter (no semantic ranking). Used as supporting context alongside
+        transcript evidence — not as primary search results.
+        """
+        ids = [mid for mid in meeting_ids if mid]
+        if not ids:
+            return []
+        try:
+            raw = self.collection.get(
+                where={
+                    "$and": [
+                        {"source_type": {"$in": ["agenda", "minutes"]}},
+                        {"meeting_id": {"$in": ids}},
+                    ]
+                },
+                include=["documents", "metadatas"],
+            )
+        except Exception:
+            return []
+        return [
+            {"text": doc, "meta": meta}
+            for doc, meta in zip(raw["documents"], raw["metadatas"])
+        ]
+
+    def format_context(
+        self,
+        transcript_results: list[dict],
+        doc_results: list[dict] | None = None,
+        max_chars: int = 12_000,
+    ) -> str:
+        """
+        Build the LLM context block.
+
+        Transcripts are labelled [SOURCE N] and are the primary evidence.
+        Agenda/minutes are appended as a separate MEETING DOCUMENTS section
+        labelled [DOC N] — the LLM is told these are supporting context only.
+        """
+        parts: list[str] = []
         total = 0
-        for i, r in enumerate(results, 1):
+
+        # ── Primary: transcript evidence ───────────────────────────────────
+        for i, r in enumerate(transcript_results, 1):
             m = r["meta"]
-            header_parts = [
+            header = "  ".join(p for p in [
                 f"[SOURCE {i}]",
                 m.get("committee", ""),
                 m.get("date", ""),
-                f"({m.get('source_type', '')})",
-            ]
-            header = "  ".join(p for p in header_parts if p)
+                "(transcript)",
+            ] if p)
             lines = [header]
-
             if m.get("meeting_title"):
                 lines.append(f"Meeting: {m['meeting_title']}")
-            if m.get("document_title"):
-                lines.append(f"Document: {m['document_title']}")
             if m.get("speakers"):
                 lines.append(f"Speakers: {m['speakers']}")
             if m.get("start_time", -1) >= 0:
-                lines.append(
-                    f"Timestamp: [{m['start_time']:.1f}–{m['end_time']:.1f}]"
-                )
-            lines.append("")
-            lines.append(r["text"])
-
+                lines.append(f"Timestamp: [{m['start_time']:.1f}–{m['end_time']:.1f}s]")
+            lines += ["", r["text"]]
             block = "\n".join(lines)
             if total + len(block) > max_chars:
                 break
             parts.append(block)
             total += len(block)
+
+        # ── Supporting: agenda / minutes ───────────────────────────────────
+        if doc_results:
+            doc_parts: list[str] = []
+            budget = max(0, max_chars - total - 200)
+            used = 0
+            for j, r in enumerate(doc_results, 1):
+                m = r["meta"]
+                header = "  ".join(p for p in [
+                    f"[DOC {j}]",
+                    m.get("committee", ""),
+                    m.get("date", ""),
+                    f"({m.get('source_type', 'document')})",
+                ] if p)
+                lines = [header]
+                if m.get("document_title"):
+                    lines.append(f"Document: {m['document_title']}")
+                lines += ["", r["text"]]
+                block = "\n".join(lines)
+                if used + len(block) > budget:
+                    break
+                doc_parts.append(block)
+                used += len(block)
+
+            if doc_parts:
+                parts.append(
+                    "MEETING DOCUMENTS (agenda/minutes — supporting context, not primary evidence)\n\n"
+                    + "\n\n---\n\n".join(doc_parts)
+                )
 
         return "\n\n---\n\n".join(parts)
 

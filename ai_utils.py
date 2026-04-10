@@ -69,14 +69,14 @@ def ai_call(
     """Route a chat completion to OpenAI or local Ollama.
 
     Routing logic:
-    - OPENAI_API_KEY present → OpenAI, model from OPENAI_MODEL (default: gpt-4.1)
+    - OPENAI_API_KEY present → OpenAI, model from OPENAI_MODEL (default: gpt-5.4-mini)
     - OPENAI_API_KEY absent  → Ollama, model from OLLAMA_MODEL (default: qwen2.5:14b)
                                Context from OLLAMA_NUM_CTX (default: 32768)
                                Base URL from OLLAMA_BASE_URL (default: http://localhost:11434/v1)
     """
     if os.getenv("OPENAI_API_KEY"):
         client = _get_openai_client()
-        model = os.getenv("OPENAI_MODEL", "gpt-4.1")
+        model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
