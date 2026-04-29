@@ -141,28 +141,21 @@ const ActivatableIframe = ({
   );
 };
 
-type ProgressLabelProps = {
-  status: string;
-  message?: string;
-  error?: string | null;
-};
+const isBuilding = (status: string) =>
+  status === "queued" || status === "running";
 
-const progressMessage = ({ status, message, error }: ProgressLabelProps) => {
-  if (error) return error;
+const isLoadingMap = (status: string) =>
+  status === "fetching" || status === "idle";
+
+const buildingLabel = (status: string, message?: string): string => {
   if (message) return message;
   switch (status) {
-    case "fetching":
-      return "Looking for an existing argument map…";
     case "queued":
       return "Queued: building deliberation map from transcript…";
     case "running":
-      return "Synthesizing the deliberation map (this can take a minute)…";
-    case "finished":
-      return null;
-    case "error":
-      return "Something went wrong building the deliberation map.";
+      return "Synthesizing the deliberation map. This can take a minute or two on long meetings.";
     default:
-      return "Loading…";
+      return "Working on the deliberation map…";
   }
 };
 
@@ -225,7 +218,7 @@ const QuestionSection = ({
 
 const CdmPage = ({ meetingId }: { meetingId: string }) => {
   const { data: list, loading: listLoading, error: listError } = useTranscriptions();
-  const argMap = useArgumentMap(meetingId, { autoStart: true });
+  const argMap = useArgumentMap(meetingId, { autoFetch: true });
   const audio = useAudioSnippets(meetingId);
 
   const [summaries, setSummaries] = useState<SummaryListResponse | null>(null);
@@ -286,13 +279,12 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
     );
   }
 
-  const progressLabel = progressMessage({
-    status: argMap.progress.status,
-    message: argMap.progress.message,
-    error: argMap.error,
-  });
-
+  const status = argMap.progress.status;
   const hasQuestions = !!meeting && meeting.questions.length > 0;
+  const building = isBuilding(status);
+  const loadingMap = isLoadingMap(status) && !hasQuestions;
+  const errored = status === "error";
+  const missing = status === "missing";
 
   return (
     <div className="cdm-page">
@@ -340,7 +332,7 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
       </header>
 
       <div className="cdm-scroll">
-        {(listLoading || (!hasQuestions && !progressLabel)) && (
+        {(listLoading || loadingMap) && !errored && !missing && !building && (
           <div className="cdm-section-inner" style={{ padding: "1.5rem 0" }}>
             <div style={{ color: "#666" }}>Loading meeting…</div>
           </div>
@@ -354,9 +346,61 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
           </div>
         )}
 
-        {progressLabel && !hasQuestions && (
+        {building && (
           <div className="cdm-section-inner" style={{ padding: "1.5rem 0" }}>
-            <div className="msga-callout">{progressLabel}</div>
+            <div className="cdm-progress-callout">
+              <span className="cdm-progress-spinner" />
+              <span>{buildingLabel(status, argMap.progress.message)}</span>
+            </div>
+          </div>
+        )}
+
+        {errored && !building && (
+          <div className="cdm-section-inner" style={{ padding: "1.5rem 0" }}>
+            <div className="cdm-error-callout">
+              <div style={{ marginBottom: "0.5rem" }}>
+                <strong>Couldn't build the deliberation map.</strong>
+              </div>
+              {argMap.error && (
+                <div style={{ marginBottom: "0.75rem", color: "#7a1f1f" }}>
+                  {argMap.error}
+                </div>
+              )}
+              <button
+                className="cdm-action-btn"
+                onClick={() => void argMap.ensure()}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {missing && !building && item && (
+          <div className="cdm-empty-state">
+            <div className="cdm-empty-icon">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <circle cx="24" cy="24" r="22" stroke="#ccc" strokeWidth="2" />
+                <path
+                  d="M16 24h16M24 16v16"
+                  stroke="#ccc"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <h2>No deliberation map yet</h2>
+            <p style={{ maxWidth: 480, margin: "0 auto 1rem" }}>
+              This meeting's transcript hasn't been processed into a structured
+              argument map yet. Generating one runs the full LLM pipeline over
+              the transcript and usually takes a minute or two.
+            </p>
+            <button
+              className="cdm-action-btn"
+              onClick={() => void argMap.ensure()}
+            >
+              Generate argument map
+            </button>
           </div>
         )}
 
@@ -370,30 +414,15 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
             />
           ))}
 
-        {hasQuestions && progressLabel && (
-          <div className="cdm-section-inner" style={{ padding: "0.5rem 0" }}>
-            <div className="msga-callout">{progressLabel}</div>
-          </div>
-        )}
-
-        {!progressLabel && !hasQuestions && !listLoading && item && (
-          <div className="cdm-empty-state">
-            <div className="cdm-empty-icon">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <circle cx="24" cy="24" r="22" stroke="#ccc" strokeWidth="2" />
-                <path
-                  d="M16 24h16M24 16v16"
-                  stroke="#ccc"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </div>
-            <h2>Deliberation map not yet available</h2>
-            <p>
-              This meeting's transcript is being processed. The structured
-              argument map will appear here once it's ready.
-            </p>
+        {hasQuestions && !building && (
+          <div className="cdm-section-inner" style={{ padding: "0.5rem 0 1rem" }}>
+            <button
+              className="cdm-action-btn cdm-action-btn-ghost"
+              onClick={() => void argMap.generate()}
+              title="Re-run the LLM pipeline to produce a fresh version"
+            >
+              Regenerate argument map
+            </button>
           </div>
         )}
 

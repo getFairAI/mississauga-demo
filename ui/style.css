@@ -2549,3 +2549,79 @@ body {
   color: #8a1c13;
   border-left: 3px solid #c0392b;
 }
+
+/* ===== CDM action buttons / progress / error states ===== */
+
+.cdm-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--msga-link-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-family: var(--msga-font);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.cdm-action-btn:hover {
+  background: #004d7a;
+}
+
+.cdm-action-btn:disabled {
+  background: #aaa;
+  cursor: not-allowed;
+}
+
+.cdm-action-btn-ghost {
+  background: transparent;
+  color: var(--msga-link-blue);
+  border: 1px solid var(--msga-border);
+  font-weight: 500;
+}
+
+.cdm-action-btn-ghost:hover {
+  background: rgba(0, 119, 200, 0.06);
+  border-color: var(--msga-link-blue);
+}
+
+.cdm-progress-callout {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #eaf3fa;
+  border: 1px solid #c3dcec;
+  border-left: 3px solid var(--msga-link-blue);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
+  color: #154766;
+}
+
+.cdm-progress-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 119, 200, 0.25);
+  border-top-color: var(--msga-link-blue);
+  border-radius: 50%;
+  animation: cdm-spin 0.85s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes cdm-spin {
+  to { transform: rotate(360deg); }
+}
+
+.cdm-error-callout {
+  background: #fdecea;
+  border: 1px solid #f3c0bb;
+  border-left: 3px solid #c0392b;
+  border-radius: 6px;
+  padding: 1rem 1.1rem;
+  color: #5b1410;
+  font-size: 0.9rem;
+}
