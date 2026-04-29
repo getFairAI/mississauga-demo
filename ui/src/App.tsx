@@ -4,10 +4,12 @@ import HomePage from "./pages/HomePage";
 import TopicDetailPage from "./pages/TopicDetailPage";
 import SearchChatPage from "./pages/SearchChatPage";
 import TranscriptPage from "./pages/TranscriptPage";
+import CdmPage from "./pages/CdmPage";
 
 type Route =
   | { page: "mississauga" }
   | { page: "home" }
+  | { page: "cdm"; meetingId: string }
   | { page: "topic"; topicId: string }
   | { page: "transcript"; transcriptId: string }
   | { page: "chat"; initialQuery?: string };
@@ -18,6 +20,10 @@ const parseHash = (hash: string): Route => {
   const params = new URLSearchParams(query);
 
   if (path === "/home") return { page: "home" };
+  if (path.startsWith("/cdm/")) {
+    const meetingId = path.slice("/cdm/".length);
+    return { page: "cdm", meetingId };
+  }
   if (path.startsWith("/topic/")) {
     const topicId = path.slice("/topic/".length);
     return { page: "topic", topicId };
@@ -55,6 +61,8 @@ const App = () => {
       return <MississaugaPage />;
     case "home":
       return <HomePage />;
+    case "cdm":
+      return <CdmPage meetingId={route.meetingId} />;
     case "topic":
       return <TopicDetailPage topicId={route.topicId} />;
     case "transcript":

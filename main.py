@@ -215,7 +215,7 @@ Return ONLY valid JSON matching this schema:
   "agenda_items": [{"item": "string", "presenter": "string or null"}],
   "topics": ["short description of topic discussed"],
   "positions": [
-    {"speaker": "string", "timestamp": "start-end", "claim": "one-sentence paraphrase", "quote": "exact words from transcript"}
+    {"speaker": "string", "role": "Councillor|Mayor|Chair|Staff|Resident|Presenter|Other or null", "timestamp": "start-end", "claim": "one-sentence paraphrase", "quote": "exact words from transcript"}
   ],
   "questions": [
     {"text": "string", "raised_by": "speaker name or null", "timestamp": "start-end or null", "answered": false}
@@ -228,6 +228,7 @@ Return ONLY valid JSON matching this schema:
 Rules:
 - Quotes must be the speaker's exact words from the transcript.
 - Include timestamps in start-end format wherever available.
+- For "role", classify the speaker from explicit cues in the transcript ("Councillor", "Mayor", "Chair", staff/manager titles, deputation/resident, external presenter). Use null when the role is genuinely unclear — never guess.
 - If nothing was found for a field, use an empty list [].
 - Do not invent, infer, or carry in knowledge from outside this section.
 """
@@ -248,6 +249,11 @@ Your task:
    - type "closed" → yes/no or proceed/reject → label the claim S (support), N (negate), or M (modify)
    - Mark unresolved = true if the meeting ended without a clear answer or decision.
    - Collect the strongest supporting evidence (quotes + timestamps + speakers) from across all sections.
+   - For each evidence item, carry forward the speaker's role from the extractions when available; otherwise leave null.
+   - Write a "deliberative_question": a neutral, decision-framed phrasing of the question that a citizen audience can engage with. One sentence, ending in "?".
+   - Write a "decision": the final outcome if resolved (e.g. "Recommendation carried", "Referred to staff", "Deferred to next meeting"); use "Unresolved" exactly when unresolved=true.
+   - Write a "theme": one short label (1-3 words) such as "Property tax", "Cycling infrastructure", "Procurement", "Public consultation".
+   - Write a "summary": 2-3 neutral sentences synopsizing the discussion on this question.
 5. Strip procedural chatter, pleasantries, and off-topic content.
 
 Return ONLY valid JSON:
@@ -262,10 +268,14 @@ Return ONLY valid JSON:
     "core_questions": [
       {
         "question": "string",
+        "deliberative_question": "string",
+        "decision": "string",
+        "theme": "string",
+        "summary": "string",
         "type": "open|closed",
         "unresolved": true,
         "options_or_claims": [{"label": "O1|S|N|M", "claim": "string", "support": ["quote [timestamp]"]}],
-        "evidence": [{"speaker": "string", "timestamp": "string", "quote": "string"}]
+        "evidence": [{"speaker": "string", "role": "string or null", "timestamp": "string", "quote": "string"}]
       }
     ]
   }

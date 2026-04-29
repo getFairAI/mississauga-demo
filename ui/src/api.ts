@@ -100,11 +100,20 @@ export type ArgumentMapPayload = {
     agenda?: { item?: string; presenter?: string | null }[];
     core_questions?: Array<{
       question?: string;
+      deliberative_question?: string;
+      decision?: string;
+      theme?: string;
+      summary?: string;
       negation_url?: string;
       type?: string;
       unresolved?: boolean;
       options_or_claims?: Array<{ label?: string; claim?: string; support?: string[] }>;
-      evidence?: Array<{ speaker?: string; timestamp?: string; quote?: string }>;
+      evidence?: Array<{
+        speaker?: string;
+        role?: string;
+        timestamp?: string;
+        quote?: string;
+      }>;
     }>;
   };
   raw?: unknown;

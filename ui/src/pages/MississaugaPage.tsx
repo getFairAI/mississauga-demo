@@ -19,10 +19,30 @@ function groupByTopic(transcripts: TranscriptListItem[]): Record<string, Transcr
   }, {});
 }
 
+const FILENAME_RE = /^.*?_(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})$/;
+
+function mostRecent(transcripts: TranscriptListItem[]): TranscriptListItem | null {
+  if (transcripts.length === 0) return null;
+  const score = (t: TranscriptListItem) => {
+    const m = t.id.match(FILENAME_RE);
+    if (!m) return 0;
+    const [, y, mo, d, hh, mm] = m;
+    return (
+      +y * 1e8 +
+      +mo * 1e6 +
+      +d * 1e4 +
+      +hh * 100 +
+      +mm
+    );
+  };
+  return [...transcripts].sort((a, b) => score(b) - score(a))[0];
+}
+
 const MississaugaPage = () => {
   const { data: transcripts, loading, error } = useTranscriptions();
   const grouped = useMemo(() => groupByTopic(transcripts), [transcripts]);
   const topicNames = useMemo(() => Object.keys(grouped).sort(), [grouped]);
+  const recent = useMemo(() => mostRecent(transcripts), [transcripts]);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -167,14 +187,25 @@ const MississaugaPage = () => {
                                     {t.title}
                                   </a>
                                   <a
-                                    href={`#/topic/${t.id}`}
+                                    href={`#/cdm/${t.id}`}
                                     className="msga-meeting-louie-link"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      navigate(`/cdm/${t.id}`);
+                                    }}
+                                  >
+                                    Civic Deliberative Memory
+                                  </a>
+                                  {" · "}
+                                  <a
+                                    href={`#/topic/${t.id}`}
+                                    className="msga-meeting-classic-link"
                                     onClick={(e) => {
                                       e.preventDefault();
                                       navigate(`/topic/${t.id}`);
                                     }}
                                   >
-                                    Civic Deliberative Memory
+                                    Classic view
                                   </a>
                                 </div>
                               </div>
@@ -223,17 +254,33 @@ const MississaugaPage = () => {
                 }}
               />
 
-              {/* Louie entry point - highlighted */}
-              <a
-                href="#/home"
-                className="msga-sidebar-link louie-link"
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate("/home");
-                }}
-              >
-                Civic Deliberative Memory
-              </a>
+              {/* Louie entry point — links to most recent meeting's CDM */}
+              {recent ? (
+                <div
+                  className="msga-sidebar-cdm-block"
+                  onClick={() => navigate(`/cdm/${recent.id}`)}
+                  role="button"
+                >
+                  <div className="msga-sidebar-cdm-label">
+                    Civic Deliberative Memory
+                  </div>
+                  <div className="msga-sidebar-cdm-meeting">
+                    {recent.topic ?? recent.title}
+                  </div>
+                  <div className="msga-sidebar-cdm-date">{recent.title}</div>
+                </div>
+              ) : (
+                <a
+                  href="#/home"
+                  className="msga-sidebar-link louie-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate("/home");
+                  }}
+                >
+                  Civic Deliberative Memory
+                </a>
+              )}
             </div>
           </aside>
         </div>
