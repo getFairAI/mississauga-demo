@@ -74,7 +74,8 @@ def ai_call(
                                Context from OLLAMA_NUM_CTX (default: 32768)
                                Base URL from OLLAMA_BASE_URL (default: http://localhost:11434/v1)
     """
-    if os.getenv("OPENAI_API_KEY"):
+    is_openai = bool(os.getenv("OPENAI_API_KEY"))
+    if is_openai:
         client = _get_openai_client()
         model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
         kwargs: dict[str, Any] = {
@@ -105,7 +106,16 @@ def ai_call(
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-    completion = client.chat.completions.create(**kwargs)
+    if is_openai:
+        from openai_guard import guarded_call, key_chat
+        key = key_chat(model, messages, temperature=temperature, json_mode=json_mode)
+        completion = guarded_call(
+            "ai_utils.ai_call",
+            key,
+            lambda: client.chat.completions.create(**kwargs),
+        )
+    else:
+        completion = client.chat.completions.create(**kwargs)
     return completion.choices[0].message.content
 
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import type { Meeting } from "../adapters/meetingAdapter";
 import { askAssistant, type AssistantResponse } from "../api";
+import { navigate } from "../App";
 
 const renderInline = (text: string) => {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
@@ -146,6 +147,8 @@ const responseToMarkdown = (resp: AssistantResponse): string => {
   return resp.answer?.trim() || "I couldn't find a relevant answer in the meeting records.";
 };
 
+const VISIBLE_WELCOME_CHIPS = 4;
+
 const FloatingChat = ({ meeting }: Props) => {
   const [expanded, setExpanded] = useState(true);
   const [closing, setClosing] = useState(false);
@@ -155,11 +158,13 @@ const FloatingChat = ({ meeting }: Props) => {
   const [, setStreamingId] = useState<string | null>(null);
   const [hasOpened, setHasOpened] = useState(false);
   const [hasBeenWelcomed, setHasBeenWelcomed] = useState(false);
+  const [showAllChips, setShowAllChips] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setMessages([]);
+    setShowAllChips(false);
   }, [meeting.id]);
 
   useEffect(() => {
@@ -242,10 +247,23 @@ const FloatingChat = ({ meeting }: Props) => {
     [draftInput, thinking],
   );
 
+  const goToChat = () => {
+    const q = draftInput.trim();
+    if (!q) return;
+    navigate(`/chat?q=${encodeURIComponent(q)}`);
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    }
+  };
+
+  const handleWelcomeKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      goToChat();
     }
   };
 
@@ -267,14 +285,18 @@ const FloatingChat = ({ meeting }: Props) => {
     void handleSend(question);
   };
 
-  const suggestedQuestions = meeting.questions
+  const allSuggestedQuestions = meeting.questions
     .filter((q) => q.deliberativeQuestion)
-    .slice(0, 3)
     .map((q) => ({
       label: `${q.number}. ${q.deliberativeQuestion}`,
       question: q.deliberativeQuestion,
       id: q.id,
     }));
+  const suggestedQuestions = allSuggestedQuestions.slice(0, 3);
+  const visibleWelcomeChips = showAllChips
+    ? allSuggestedQuestions
+    : allSuggestedQuestions.slice(0, VISIBLE_WELCOME_CHIPS);
+  const hiddenChipCount = allSuggestedQuestions.length - VISIBLE_WELCOME_CHIPS;
 
   return (
     <>
@@ -325,12 +347,12 @@ const FloatingChat = ({ meeting }: Props) => {
                   placeholder="Ask about this meeting..."
                   value={draftInput}
                   onChange={(e) => setDraftInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
+                  onKeyDown={handleWelcomeKeyDown}
                 />
                 <button
                   className="fc-send-btn"
-                  onClick={() => void handleSend()}
-                  disabled={thinking || !draftInput.trim()}
+                  onClick={goToChat}
+                  disabled={!draftInput.trim()}
                 >
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                     <path
@@ -343,8 +365,10 @@ const FloatingChat = ({ meeting }: Props) => {
                   </svg>
                 </button>
               </div>
-              <div className="fc-welcome-chips">
-                {suggestedQuestions.map((s) => (
+              <div
+                className={`fc-welcome-chips ${showAllChips ? "fc-welcome-chips-scroll" : ""}`}
+              >
+                {visibleWelcomeChips.map((s) => (
                   <button
                     key={s.question}
                     className="fc-chip"
@@ -353,6 +377,14 @@ const FloatingChat = ({ meeting }: Props) => {
                     {s.label}
                   </button>
                 ))}
+                {!showAllChips && hiddenChipCount > 0 && (
+                  <button
+                    className="fc-chip fc-chip-more"
+                    onClick={() => setShowAllChips(true)}
+                  >
+                    Show more ({hiddenChipCount})
+                  </button>
+                )}
               </div>
             </div>
           )}

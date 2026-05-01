@@ -1,6 +1,12 @@
-import { useState, useEffect, useRef, type JSX } from "react";
+import { useState, useEffect, useRef, useCallback, type JSX } from "react";
 import { navigate } from "../App";
-import { askAssistant } from "../api";
+import {
+  askAssistant,
+  createChatSession,
+  listChatSessions,
+  loadChatSession,
+  type ChatSessionSummary,
+} from "../api";
 
 type ChatMessage = {
   id: string;
@@ -62,11 +68,19 @@ const renderChatMarkdown = (text: string) => {
   return elements;
 };
 
-const mockSessions = [
-  "Institutional memory search",
-  "Road safety budget allocation",
-  "Stormwater infrastructure",
-  "Transit fare policy",
+const ACTIVE_SESSION_KEY = "civic.activeChatSession";
+
+const makeSessionTitle = (text: string): string => {
+  const s = text.trim();
+  return s.length <= 7 ? s : s.slice(0, 7) + "...";
+};
+
+const navItems = [
+  "Services and programs",
+  "Council",
+  "Our organization",
+  "Events and attractions",
+  "Projects and strategies",
 ];
 
 const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
@@ -77,18 +91,102 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
   );
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(!!initialQuery);
+  const [sessionId, setSessionId] = useState<string | undefined>(undefined);
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Mirror sessionId in a ref so async callbacks always see the latest value
+  // without re-triggering the initial-query effect.
+  const sessionIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    if (sessionId) {
+      localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
+    }
+  }, [sessionId]);
+
+  const refreshSessions = useCallback(() => {
+    listChatSessions()
+      .then(setSessions)
+      .catch(() => {
+        // Sessions list is non-critical UI; ignore failures.
+      });
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking]);
 
-  // Handle initial query
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
+  // Restore last active session on mount when there's no initialQuery.
+  // initialQuery means "start a fresh chat with this question", so we skip
+  // restoration in that case.
+  useEffect(() => {
+    if (initialQuery) return;
+    const stored = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!stored) return;
+    let cancelled = false;
+    loadChatSession(stored)
+      .then((data) => {
+        if (cancelled || !data) return;
+        setSessionId(data.id);
+        setMessages(
+          data.messages.map((m, idx) => ({
+            id: `${data.id}-${idx}`,
+            role: m.role,
+            text: m.content,
+          })),
+        );
+      })
+      .catch(() => {
+        // Stale id — drop it so we don't keep failing on every mount.
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialQuery]);
+
+  // Handle initial query (?q=...) — entries from the / or /cdm search bars.
+  // Eagerly mint a session with a short title derived from the query so the
+  // conversation shows up in the sidebar before the LLM response lands.
   useEffect(() => {
     if (!initialQuery) return;
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+    setSessionId(undefined);
+    sessionIdRef.current = undefined;
 
-    askAssistant(initialQuery)
+    let cancelled = false;
+    const appendError = () => {
+      if (cancelled) return;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === "a-init")) return prev;
+        return [
+          ...prev,
+          {
+            id: "a-init",
+            role: "assistant",
+            text: "Sorry, I was unable to search the transcripts at this time.",
+          },
+        ];
+      });
+      setThinking(false);
+    };
+
+    createChatSession(makeSessionTitle(initialQuery))
+      .then((session) => {
+        if (cancelled) return null;
+        setSessionId(session.id);
+        sessionIdRef.current = session.id;
+        refreshSessions();
+        return askAssistant(initialQuery, session.id);
+      })
       .then((response) => {
+        if (cancelled || !response) return;
+        if (response.session_id) setSessionId(response.session_id);
         setMessages((prev) => {
           if (prev.some((m) => m.id === "a-init")) return prev;
           return [
@@ -101,22 +199,14 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
           ];
         });
         setThinking(false);
+        refreshSessions();
       })
-      .catch(() => {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === "a-init")) return prev;
-          return [
-            ...prev,
-            {
-              id: "a-init",
-              role: "assistant",
-              text: "Sorry, I was unable to search the transcripts at this time.",
-            },
-          ];
-        });
-        setThinking(false);
-      });
-  }, [initialQuery]);
+      .catch(appendError);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialQuery, refreshSessions]);
 
   const handleSend = () => {
     const text = input.trim();
@@ -126,8 +216,9 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
     setMessages((prev) => [...prev, { id: userId, role: "user", text }]);
     setThinking(true);
 
-    askAssistant(text)
+    askAssistant(text, sessionIdRef.current)
       .then((response) => {
+        if (response.session_id) setSessionId(response.session_id);
         setMessages((prev) => [
           ...prev,
           {
@@ -137,6 +228,7 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
           },
         ]);
         setThinking(false);
+        refreshSessions();
       })
       .catch(() => {
         setMessages((prev) => [
@@ -151,8 +243,42 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
       });
   };
 
+  const handleSelectSession = (id: string) => {
+    if (id === sessionId || thinking) return;
+    loadChatSession(id)
+      .then((data) => {
+        if (!data) return;
+        setSessionId(data.id);
+        setMessages(
+          data.messages.map((m, idx) => ({
+            id: `${data.id}-${idx}`,
+            role: m.role,
+            text: m.content,
+          })),
+        );
+      })
+      .catch(() => {
+        // Surface a subtle inline error rather than silent failure.
+        setMessages([
+          {
+            id: `e-${Date.now()}`,
+            role: "assistant",
+            text: "Couldn't load that conversation.",
+          },
+        ]);
+      });
+  };
+
+  const handleNewChat = () => {
+    if (thinking) return;
+    setSessionId(undefined);
+    sessionIdRef.current = undefined;
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+    setMessages([]);
+  };
+
   return (
-    <div style={{ minHeight: "100vh", background: "var(--msga-bg)" }}>
+    <div className="search-chat-page" style={{ background: "var(--msga-bg)" }}>
       {/* Header */}
       <header className="msga-header">
         <a
@@ -169,43 +295,90 @@ const SearchChatPage = ({ initialQuery }: { initialQuery?: string }) => {
           </svg>
           MISSISSAUGA
         </a>
-        <div className="msga-header-subtitle" style={{ color: "white", fontSize: "0.85rem", fontWeight: 600, letterSpacing: "0.3px" }}>
-          Civic Deliberative Memory
+        <div className="msga-header-search">
+          <input type="text" placeholder="Search mississauga.ca" />
+          <button>Search</button>
         </div>
       </header>
 
       {/* Nav */}
       <nav className="msga-nav">
+        {navItems.map((item) => (
+          <div key={item} className="msga-nav-item">
+            {item}
+          </div>
+        ))}
         <a
-          href="#/home"
-          className="msga-nav-item"
+          href="#/chat"
+          className="msga-nav-item msga-nav-item-cm active"
           onClick={(e) => {
             e.preventDefault();
-            navigate("/home");
+            navigate("/chat");
           }}
         >
-          ← Home
+          Civic Memory
         </a>
-        <div className="msga-nav-item active">Search</div>
       </nav>
 
       {/* Chat layout */}
       <div className="search-chat-layout">
         {/* Sidebar */}
         <div className="search-chat-sidebar">
-          <h3>Conversations</h3>
-          {mockSessions.map((session, idx) => (
-            <div
-              key={session}
-              className={`search-chat-session ${idx === 0 ? "active" : ""}`}
+          <div className="search-chat-sidebar-head">
+            <h3>Conversations</h3>
+            <button
+              type="button"
+              className="search-chat-new-btn"
+              onClick={handleNewChat}
+              disabled={thinking}
+              title="Start a new conversation"
             >
-              {session}
+              + New
+            </button>
+          </div>
+          {sessions.length === 0 && (
+            <div className="search-chat-sidebar-empty">
+              No conversations yet.
+            </div>
+          )}
+          {sessions.map((s) => (
+            <div
+              key={s.id}
+              className={`search-chat-session ${s.id === sessionId ? "active" : ""}`}
+              onClick={() => handleSelectSession(s.id)}
+              title={s.title ?? "Untitled conversation"}
+            >
+              {s.title ?? "New conversation"}
             </div>
           ))}
         </div>
 
         {/* Main chat */}
         <div className="search-chat-main">
+          <div className="search-chat-subheader">
+            <a
+              href="#/"
+              className="cdm-back-link"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate("/");
+              }}
+              title="Back"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M10 12L6 8L10 4"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </a>
+            <span className="search-chat-subheader-title">
+              Civic Memory Search
+            </span>
+          </div>
           <div className="chat-messages">
             {messages.length === 0 && (
               <div

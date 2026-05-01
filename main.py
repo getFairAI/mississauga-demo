@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Set, AsyncGenerator
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     File,
     Form,
     FastAPI,
@@ -882,15 +883,21 @@ async def openai_stream_transcribe(
 
     transcript_parts: list[str] = []
     try:
-        stream = await async_client.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",
-            file=(
-                audio_path.name or "audio.wav",
-                audio_bytes,
-                content_type or "audio/wav",
+        from openai_guard import guarded_acall
+
+        stream = await guarded_acall(
+            "main.openai_stream_transcribe",
+            None,  # streaming response — single-flight is unsafe
+            lambda: async_client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
+                file=(
+                    audio_path.name or "audio.wav",
+                    audio_bytes,
+                    content_type or "audio/wav",
+                ),
+                response_format="json",
+                stream=True,
             ),
-            response_format="json",
-            stream=True,
         )
 
         async for event in stream:
@@ -933,14 +940,25 @@ async def openai_diarize_transcribe(
     await broadcast_json(room_id, {"job": "openai_transcribe", "stage": "running"})
 
     try:
-        response = await async_client.audio.transcriptions.create(
-            model="gpt-4o-transcribe-diarize",
-            file=(
-                audio_path.name or "audio.wav",
-                audio_bytes,
-                content_type or "audio/wav",
-            ),
+        from openai_guard import guarded_acall, key_audio
+
+        key = key_audio(
+            "gpt-4o-transcribe-diarize",
+            audio_bytes,
             response_format="diarized_json",
+        )
+        response = await guarded_acall(
+            "main.openai_diarize_transcribe",
+            key,
+            lambda: async_client.audio.transcriptions.create(
+                model="gpt-4o-transcribe-diarize",
+                file=(
+                    audio_path.name or "audio.wav",
+                    audio_bytes,
+                    content_type or "audio/wav",
+                ),
+                response_format="diarized_json",
+            ),
         )
 
         # Convert the SDK object into a serializable dict.
@@ -1059,6 +1077,71 @@ def _find_media_for_transcript(transcript_id: str) -> Path:
 async def create_room() -> RoomResponse:
     room_id = await manager.create_room()
     return RoomResponse(id=room_id)
+
+
+def _check_guard_admin(request: Request) -> None:
+    expected = os.getenv("OPENAI_GUARD_ADMIN_TOKEN")
+    if not expected:
+        return
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    if auth.split(" ", 1)[1].strip() != expected:
+        raise HTTPException(status_code=403, detail="invalid admin token")
+
+
+@app.get("/admin/openai-guard")
+async def admin_openai_guard_status(request: Request) -> dict:
+    _check_guard_admin(request)
+    from openai_guard import guard_status
+    return guard_status()
+
+
+@app.post("/admin/reset-openai-guard")
+async def admin_reset_openai_guard(request: Request) -> dict:
+    _check_guard_admin(request)
+    from openai_guard import reset_breaker
+    return reset_breaker()
+
+
+@app.get("/admin/chat-sessions")
+async def admin_chat_sessions(request: Request) -> dict:
+    _check_guard_admin(request)
+    from chat_sessions import stats
+    return stats()
+
+
+@app.post("/chat-sessions/{session_id}/forget")
+async def forget_chat_session(session_id: str) -> dict:
+    """Drop a single chat session. Open by design — sessions are non-sensitive."""
+    from chat_sessions import drop
+    return {"forgot": drop(session_id)}
+
+
+@app.get("/chat-sessions")
+async def list_chat_sessions() -> dict:
+    """List all persisted chat sessions, most-recent first."""
+    from chat_sessions import list_sessions
+    return {"items": list_sessions()}
+
+
+@app.post("/chat-sessions")
+async def create_chat_session(payload: dict | None = Body(default=None)) -> dict:
+    """Mint a new empty session. Optional ``title`` derives the readable label;
+    when omitted, it'll be set from the first user message."""
+    from chat_sessions import create
+    title = (payload or {}).get("title") if isinstance(payload, dict) else None
+    return create(title if isinstance(title, str) and title.strip() else None)
+
+
+@app.get("/chat-sessions/{session_id}")
+async def get_chat_session(session_id: str) -> dict:
+    """Return the full message history for a session."""
+    from chat_sessions import load_full
+    payload = load_full(session_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return payload
 
 
 @app.get("/rooms", response_model=RoomsResponse)
@@ -1592,12 +1675,19 @@ async def websocket_endpoint_with_prefix(websocket: WebSocket, room_id: str) -> 
 async def assistant(
     request: Request,
     question: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
 ):
     try:
         if not question or not str(question).strip():
             raise HTTPException(status_code=400, detail="No question received.")
 
         question = question.strip()
+
+        # ── Session history ──────────────────────────────────────────────
+        # If session_id is provided, prepend prior turns to the LLM context
+        # so follow-ups have continuity. New session ids are minted on demand.
+        from chat_sessions import get_or_create, append_turn
+        active_session_id, prior_messages = get_or_create(session_id)
 
         # ── Retrieve relevant chunks from RAG ────────────────────────────
         from rag import get_rag
@@ -1677,11 +1767,15 @@ async def assistant(
             f"QUESTION: {question}"
         )
 
+        llm_messages: list[dict] = [{"role": "system", "content": system_msg}]
+        # Prior turns provide conversational continuity. We send the plain
+        # user/assistant text only (no embedded context blocks) so the model
+        # can resolve pronouns and follow-ups without re-reading old RAG dumps.
+        llm_messages.extend(prior_messages)
+        llm_messages.append({"role": "user", "content": user_msg})
+
         raw = ai_call(
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
+            messages=llm_messages,
             temperature=0.2,
             json_mode=True,
         ).strip()
@@ -1718,6 +1812,20 @@ async def assistant(
                 clean_sources.append(s)
 
         payload["sources"] = clean_sources
+
+        # Persist the turn for follow-ups. We store the question (not the
+        # context-stuffed user_msg) so prior turns stay short. The assistant
+        # entry stores the textual answer; chart payloads are kept in the
+        # response but not added to the LLM context.
+        assistant_text = payload.get("answer") or ""
+        if not assistant_text and payload.get("type") == "chart":
+            assistant_text = "[chart returned]"
+        append_turn(
+            active_session_id,
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": assistant_text},
+        )
+        payload["session_id"] = active_session_id
         return payload
 
     except HTTPException:

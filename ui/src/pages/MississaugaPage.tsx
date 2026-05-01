@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { navigate } from "../App";
 import { useTranscriptions } from "../hooks/useTranscriptions";
 import type { TranscriptListItem } from "../api";
@@ -9,6 +9,13 @@ const navItems = [
   "Our organization",
   "Events and attractions",
   "Projects and strategies",
+];
+
+const SUGGESTIONS = [
+  "When have councillors mentioned institutional memory or forgetting things?",
+  "What has council said about transit funding?",
+  "How has the stormwater issue evolved over time?",
+  "What are the main arguments for and against school bus cameras?",
 ];
 
 function groupByTopic(transcripts: TranscriptListItem[]): Record<string, TranscriptListItem[]> {
@@ -45,9 +52,30 @@ const MississaugaPage = () => {
   const recent = useMemo(() => mostRecent(transcripts), [transcripts]);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [searchValue, setSearchValue] = useState("");
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const overlayInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (searchExpanded && overlayInputRef.current) {
+      overlayInputRef.current.focus();
+    }
+  }, [searchExpanded]);
 
   const toggle = (name: string) => {
     setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
+  };
+
+  const handleSearch = (query?: string) => {
+    const q = query || searchValue.trim();
+    if (!q) return;
+    setSearchExpanded(false);
+    navigate(`/chat?q=${encodeURIComponent(q)}`);
+  };
+
+  const handleEscape = () => {
+    setSearchExpanded(false);
+    setSearchValue("");
   };
 
   return (
@@ -77,7 +105,83 @@ const MississaugaPage = () => {
             {item}
           </div>
         ))}
+        <a
+          href="#/chat"
+          className="msga-nav-item msga-nav-item-cm"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/chat");
+          }}
+        >
+          Civic Memory
+        </a>
       </nav>
+
+      {/* Search overlay — expanded state */}
+      {searchExpanded && (
+        <div
+          className="search-overlay"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) handleEscape();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") handleEscape();
+          }}
+        >
+          <div className="fc-welcome" onMouseDown={(e) => e.stopPropagation()}>
+            <h1 className="fc-welcome-title">
+              Welcome to years of Mississauga meeting records.
+            </h1>
+            <p className="fc-welcome-subtitle">How can I help you today?</p>
+            <div className="fc-welcome-input-wrap">
+              <input
+                ref={overlayInputRef}
+                className="fc-welcome-input"
+                type="text"
+                placeholder="Ask any question about council meetings..."
+                value={searchValue}
+                onChange={(e) => setSearchValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleSearch();
+                  }
+                  if (e.key === "Escape") handleEscape();
+                }}
+              />
+              <button
+                className="fc-send-btn"
+                onClick={() => handleSearch()}
+                disabled={!searchValue.trim()}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path
+                    d="M14 2L7 9M14 2L9.5 14L7 9M14 2L2 6.5L7 9"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div className="fc-welcome-chips">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  className="fc-chip"
+                  onClick={() => {
+                    setSearchValue(s);
+                    handleSearch(s);
+                  }}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <div className="msga-container" style={{ paddingTop: "0.5rem" }}>
@@ -196,27 +300,7 @@ const MississaugaPage = () => {
                                   >
                                     Civic Deliberative Memory
                                   </a>
-                                  {" · "}
-                                  <a
-                                    href={`#/topic/${t.id}`}
-                                    className="msga-meeting-classic-link"
-                                    onClick={(e) => {
-                                      e.preventDefault();
-                                      navigate(`/topic/${t.id}`);
-                                    }}
-                                  >
-                                    Classic view
-                                  </a>
                                 </div>
-                              </div>
-                              <div className="msga-meeting-right">
-                                {t.duration !== null && (
-                                  <div className="msga-meeting-doc-group">
-                                    <a href="#" className="msga-meeting-video">
-                                      Video
-                                    </a>
-                                  </div>
-                                )}
                               </div>
                             </div>
                           ))}
@@ -281,6 +365,27 @@ const MississaugaPage = () => {
                   Civic Deliberative Memory
                 </a>
               )}
+
+              {/* CDM search */}
+              <div className="msga-sidebar-search-block">
+                <div className="msga-sidebar-search-label">
+                  Search council records
+                </div>
+                <input
+                  className="msga-sidebar-search-input"
+                  type="text"
+                  placeholder="Ask any question…"
+                  value={searchValue}
+                  onChange={(e) => setSearchValue(e.target.value)}
+                  onFocus={() => setSearchExpanded(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSearch();
+                    }
+                  }}
+                />
+              </div>
             </div>
           </aside>
         </div>

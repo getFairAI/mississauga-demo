@@ -47,15 +47,36 @@ RAG_DIR = Path(__file__).parent / "data" / "rag"
 
 
 def _make_embedding_fn():
-    """Return a ChromaDB-compatible embedding function (always OpenAI)."""
+    """Return a ChromaDB-compatible embedding function (always OpenAI).
+
+    Wraps OpenAIEmbeddingFunction with the runaway-protection guard so chroma's
+    internal calls during ``.add()`` / ``.query()`` are subject to the same
+    concurrency cap, rate window, and circuit breaker as direct OpenAI calls.
+    """
     from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+    from openai_guard import guarded_call, key_embed
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set — required for RAG embeddings.")
-    return OpenAIEmbeddingFunction(
+    base = OpenAIEmbeddingFunction(
         api_key=api_key,
         model_name="text-embedding-3-small",
     )
+
+    class _Guarded:
+        def __call__(self, input):
+            inputs = list(input)
+            key = key_embed("text-embedding-3-small", inputs)
+            return guarded_call("rag.embedding_fn", key, lambda: base(inputs))
+
+        def name(self):
+            return base.name() if hasattr(base, "name") else "openai-text-embedding-3-small"
+
+        def __getattr__(self, n):
+            return getattr(base, n)
+
+    return _Guarded()
 
 
 # ---------------------------------------------------------------------------

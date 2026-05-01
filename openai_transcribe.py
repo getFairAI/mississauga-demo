@@ -23,13 +23,24 @@ def transcribe_with_openai(audio_path: Path) -> str:
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    with open(audio_path, "rb") as audio_file:
-        response = client.audio.transcriptions.create(
-            model="gpt-4o-transcribe-diarize",
-            file=audio_file,
-            response_format="diarized_json",
-            chunking_strategy="auto",
-        )
+    from openai_guard import guarded_call, key_audio
+
+    def _do_call():
+        with open(audio_path, "rb") as audio_file:
+            return client.audio.transcriptions.create(
+                model="gpt-4o-transcribe-diarize",
+                file=audio_file,
+                response_format="diarized_json",
+                chunking_strategy="auto",
+            )
+
+    key = key_audio(
+        "gpt-4o-transcribe-diarize",
+        audio_path,
+        response_format="diarized_json",
+        chunking="auto",
+    )
+    response = guarded_call("openai_transcribe.transcribe_with_openai", key, _do_call)
 
     lines = []
     for seg in response.segments:
@@ -63,16 +74,22 @@ async def openai_stream_transcribe(
         content_type = guessed or "application/octet-stream"
 
     try:
-        stream = await async_client.audio.transcriptions.create(
-            model="gpt-4o-transcribe-diarize",
-            response_format="diarized_json",
-            chunking_strategy="auto",
-            file=(
-                audio_path.name or "audio.wav",
-                audio_bytes,
-                content_type,
+        from openai_guard import guarded_acall
+
+        stream = await guarded_acall(
+            "openai_transcribe.openai_stream_transcribe",
+            None,  # streaming response — single-flight is unsafe
+            lambda: async_client.audio.transcriptions.create(
+                model="gpt-4o-transcribe-diarize",
+                response_format="diarized_json",
+                chunking_strategy="auto",
+                file=(
+                    audio_path.name or "audio.wav",
+                    audio_bytes,
+                    content_type,
+                ),
+                stream=True,
             ),
-            stream=True,
         )
 
         transcript_parts: list[str] = []

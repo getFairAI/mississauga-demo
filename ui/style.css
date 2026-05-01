@@ -741,10 +741,18 @@ body {
 
 /* ===== Search Chat Page ===== */
 
+.search-chat-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .search-chat-layout {
   display: grid;
   grid-template-columns: 240px 1fr;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
 }
 
 @media (max-width: 768px) {
@@ -754,6 +762,29 @@ body {
   .search-chat-sidebar {
     display: none;
   }
+}
+
+.search-chat-subheader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid var(--msga-border);
+  background: white;
+  flex-shrink: 0;
+}
+
+.search-chat-subheader-title {
+  font-family: var(--msga-font-heading);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--msga-text);
+}
+
+.msga-nav-item-cm {
+  margin-left: auto;
+  color: white;
+  font-weight: 600;
 }
 
 .search-chat-sidebar {
@@ -767,8 +798,45 @@ body {
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--msga-text);
-  margin: 0 0 0.75rem;
+  margin: 0;
   font-family: var(--msga-font-heading);
+}
+
+.search-chat-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  gap: 0.5rem;
+}
+
+.search-chat-new-btn {
+  background: var(--msga-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--msga-font);
+  transition: background 0.15s;
+}
+
+.search-chat-new-btn:hover {
+  background: var(--msga-link-blue);
+}
+
+.search-chat-new-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-chat-sidebar-empty {
+  font-size: 0.78rem;
+  color: #888;
+  padding: 0.4rem 0.1rem;
+  font-style: italic;
 }
 
 .search-chat-session {
@@ -798,7 +866,7 @@ body {
 .search-chat-main {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 0;
 }
 
 .chat-thinking {
@@ -1003,10 +1071,10 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(247, 247, 247, 0.97);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(4px);
   z-index: 100;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 2rem;
@@ -1016,59 +1084,6 @@ body {
 @keyframes searchFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-.search-overlay-input {
-  width: 100%;
-  max-width: 680px;
-  padding: 1.1rem 1.5rem;
-  font-size: 1.15rem;
-  font-family: var(--msga-font);
-  border: 2px solid var(--msga-blue);
-  border-radius: 10px;
-  outline: none;
-  background: white;
-  box-shadow: 0 4px 24px rgba(0, 119, 200, 0.1);
-}
-
-.search-overlay-input::placeholder {
-  color: #aaa;
-}
-
-.search-overlay-hint {
-  font-size: 0.8rem;
-  color: #999;
-  margin-top: 0.75rem;
-  text-align: center;
-}
-
-.search-overlay-suggestions {
-  margin-top: 1.5rem;
-  max-width: 680px;
-  width: 100%;
-}
-
-.search-overlay-suggestions h4 {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #999;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0 0 0.5rem;
-}
-
-.search-overlay-suggestion {
-  padding: 0.6rem 0.75rem;
-  font-size: 0.88rem;
-  color: var(--msga-link-blue);
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.1s;
-  line-height: 1.4;
-}
-
-.search-overlay-suggestion:hover {
-  background: rgba(0, 119, 200, 0.06);
 }
 
 /* ===== Memory link next to Video in meeting rows ===== */
@@ -1125,6 +1140,46 @@ body {
 .msga-sidebar-cdm-date {
   font-size: 0.75rem;
   color: #666;
+}
+
+.msga-sidebar-search-block {
+  background: linear-gradient(135deg, #f0f7ff 0%, #e8f4f8 100%);
+  border: 1px solid #d0e3f0;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 0.75rem;
+}
+
+.msga-sidebar-search-label {
+  font-family: var(--msga-font-heading);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--msga-link-blue);
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+.msga-sidebar-search-input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.85rem;
+  font-family: var(--msga-font);
+  border: 1px solid #d0e3f0;
+  border-radius: 6px;
+  outline: none;
+  background: white;
+  color: var(--msga-text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+
+.msga-sidebar-search-input:focus {
+  border-color: var(--msga-blue);
+  box-shadow: 0 0 0 3px rgba(0, 119, 200, 0.12);
+}
+
+.msga-sidebar-search-input::placeholder {
+  color: #999;
 }
 
 /* ===== CDM Page ===== */
@@ -1919,13 +1974,13 @@ body {
 /* Expanded overlay */
 .fc-overlay {
   position: fixed;
-  top: 52px;
+  top: 0;
   left: 0;
   right: 0;
   bottom: 0;
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(4px);
-  z-index: 39;
+  z-index: 110;
   display: flex;
   align-items: stretch;
   justify-content: center;
@@ -2439,6 +2494,17 @@ body {
   gap: 0.6rem;
   width: 100%;
   align-items: center;
+}
+
+.fc-welcome-chips-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.fc-chip-more {
+  font-style: italic;
+  color: #4a6c8e;
 }
 
 .fc-chips-row {

@@ -141,6 +141,14 @@ const ActivatableIframe = ({
   );
 };
 
+const navItems = [
+  "Services and programs",
+  "Council",
+  "Our organization",
+  "Events and attractions",
+  "Projects and strategies",
+];
+
 const isBuilding = (status: string) =>
   status === "queued" || status === "running";
 
@@ -288,6 +296,39 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
 
   return (
     <div className="cdm-page">
+      <header className="msga-header">
+        <a href="https://www.mississauga.ca" className="msga-header-logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <rect width="24" height="24" rx="4" fill="white" fillOpacity="0.2" />
+            <path d="M6 8h12M6 12h12M6 16h8" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          MISSISSAUGA
+        </a>
+        <div className="msga-header-search">
+          <input type="text" placeholder="Search mississauga.ca" />
+          <button>Search</button>
+        </div>
+      </header>
+      <nav className="msga-nav">
+        {navItems.map((item) => (
+          <div
+            key={item}
+            className={`msga-nav-item ${item === "Council" ? "active" : ""}`}
+          >
+            {item}
+          </div>
+        ))}
+        <a
+          href="#/chat"
+          className="msga-nav-item msga-nav-item-cm"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("/chat");
+          }}
+        >
+          Civic Memory
+        </a>
+      </nav>
       <header className="cdm-header">
         <div className="cdm-header-left">
           <a

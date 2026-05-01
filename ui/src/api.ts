@@ -1,3 +1,5 @@
+import { recordCall, singleFlight } from "./openaiGuard";
+
 const API_BASE =
   // Prefer env override; fallback to local dev server.
   (import.meta.env?.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
@@ -158,22 +160,27 @@ export type AssistantResponse = {
   answer?: string;
   chart?: AssistantChart;
   sources?: AssistantSource[];
+  session_id?: string;
 };
 
 export async function sendOpenAI(file: File, roomId?: string, diarize = false) {
-  const form = new FormData();
-  form.append("file", file);
-  if (roomId) form.append("room_id", roomId);
-  if (diarize) form.append("diarize", String(diarize));
+  recordCall("sendOpenAI");
+  const key = `sendOpenAI:${file.name}|${file.size}|${file.lastModified}|${roomId ?? ""}|${diarize}`;
+  return singleFlight(key, async () => {
+    const form = new FormData();
+    form.append("file", file);
+    if (roomId) form.append("room_id", roomId);
+    if (diarize) form.append("diarize", String(diarize));
 
-  const res = await fetch(`${API_BASE}/openai_transcribe`, {
-    method: "POST",
-    body: form,
+    const res = await fetch(`${API_BASE}/openai_transcribe`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return res.json() as Promise<{ room_id: string; transcript: string; diarize: boolean; segments?: unknown; raw?: unknown }>;
   });
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<{ room_id: string; transcript: string; diarize: boolean; segments?: unknown; raw?: unknown }>;
 }
 
 export async function sendWhisperX(file: File, device = "cuda", roomId?: string) {
@@ -195,18 +202,22 @@ export async function sendWhisperX(file: File, device = "cuda", roomId?: string)
 export async function summarizeTranscript(body: {
   transcript_id?: string;
 }) {
-  const res = await fetch(`${API_BASE}/transcriptions/summarize`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      transcript_id: body.transcript_id,
-      save_summary: true,
-    }),
+  recordCall("summarizeTranscript");
+  const key = `summarizeTranscript:${body.transcript_id ?? ""}`;
+  return singleFlight(key, async () => {
+    const res = await fetch(`${API_BASE}/transcriptions/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transcript_id: body.transcript_id,
+        save_summary: true,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return res.json() as Promise<SummaryStartResponse>;
   });
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<SummaryStartResponse>;
 }
 
 export async function fetchSummaries(transcriptId: string): Promise<SummaryListResponse | null> {
@@ -234,27 +245,35 @@ export async function fetchSummary(transcriptId: string): Promise<SummaryRespons
 }
 
 export async function analyzeTranscript(body: { transcript_id?: string }) {
-  const res = await fetch(`${API_BASE}/transcriptions/analyze`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+  recordCall("analyzeTranscript");
+  const key = `analyzeTranscript:${body.transcript_id ?? ""}`;
+  return singleFlight(key, async () => {
+    const res = await fetch(`${API_BASE}/transcriptions/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return res.json() as Promise<AnalyzeStartResponse>;
   });
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<AnalyzeStartResponse>;
 }
 
 export async function buildArgumentMap(body: { transcript_id?: string }) {
-  const res = await fetch(`${API_BASE}/transcriptions/argument-map`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+  recordCall("buildArgumentMap");
+  const key = `buildArgumentMap:${body.transcript_id ?? ""}`;
+  return singleFlight(key, async () => {
+    const res = await fetch(`${API_BASE}/transcriptions/argument-map`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return res.json() as Promise<ArgumentMapStartResponse>;
   });
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<ArgumentMapStartResponse>;
 }
 
 export async function fetchArgumentMaps(transcriptId: string): Promise<ArgumentMapListResponse | null> {
@@ -395,18 +414,91 @@ export async function streamTranscriptPages(
   }
 }
 
-export async function askAssistant(question: string): Promise<AssistantResponse> {
-  const form = new FormData();
-  form.append("question", question);
+export async function askAssistant(
+  question: string,
+  sessionId?: string,
+): Promise<AssistantResponse> {
+  recordCall("askAssistant");
+  // Single-flight key includes session so identical follow-ups in different
+  // sessions don't share a response.
+  const key = `askAssistant:${sessionId ?? "anon"}:${question}`;
+  return singleFlight(key, async () => {
+    const form = new FormData();
+    form.append("question", question);
+    if (sessionId) form.append("session_id", sessionId);
 
-  const res = await fetch(`${API_BASE}/assistant`, {
-    method: "POST",
-    body: form,
+    const res = await fetch(`${API_BASE}/assistant`, {
+      method: "POST",
+      body: form,
+    });
+
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+
+    return res.json() as Promise<AssistantResponse>;
   });
+}
 
-  if (!res.ok) {
-    throw new Error(await res.text());
+/** Best-effort: tell the server to forget a session immediately. */
+export async function forgetChatSession(sessionId: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/chat-sessions/${encodeURIComponent(sessionId)}/forget`, {
+      method: "POST",
+    });
+  } catch {
+    // Silent failure is fine.
   }
+}
 
-  return res.json() as Promise<AssistantResponse>;
+export type ChatSessionSummary = {
+  id: string;
+  title: string | null;
+  created_at: number;
+  last_seen: number;
+  message_count: number;
+};
+
+export type ChatSessionMessage = {
+  role: "user" | "assistant";
+  content: string;
+  created_at: number;
+};
+
+export type ChatSessionFull = {
+  id: string;
+  title: string | null;
+  created_at: number;
+  last_seen: number;
+  messages: ChatSessionMessage[];
+};
+
+export async function createChatSession(
+  title?: string,
+): Promise<ChatSessionSummary> {
+  const res = await fetch(`${API_BASE}/chat-sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(title ? { title } : {}),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<ChatSessionSummary>;
+}
+
+export async function listChatSessions(): Promise<ChatSessionSummary[]> {
+  const res = await fetch(`${API_BASE}/chat-sessions`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as { items: ChatSessionSummary[] };
+  return data.items ?? [];
+}
+
+export async function loadChatSession(
+  sessionId: string,
+): Promise<ChatSessionFull | null> {
+  const res = await fetch(
+    `${API_BASE}/chat-sessions/${encodeURIComponent(sessionId)}`,
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<ChatSessionFull>;
 }
