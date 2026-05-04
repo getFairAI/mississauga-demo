@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import MississaugaPage from "./pages/MississaugaPage";
 import HomePage from "./pages/HomePage";
 import TopicDetailPage from "./pages/TopicDetailPage";
-import SearchChatPage from "./pages/SearchChatPage";
 import TranscriptPage from "./pages/TranscriptPage";
 import CdmPage from "./pages/CdmPage";
 
@@ -11,13 +10,11 @@ type Route =
   | { page: "home" }
   | { page: "cdm"; meetingId: string }
   | { page: "topic"; topicId: string }
-  | { page: "transcript"; transcriptId: string }
-  | { page: "chat"; initialQuery?: string };
+  | { page: "transcript"; transcriptId: string };
 
 const parseHash = (hash: string): Route => {
   const trimmed = hash.startsWith("#") ? hash.slice(1) : hash;
-  const [path = "/", query = ""] = trimmed.split("?");
-  const params = new URLSearchParams(query);
+  const [path = "/"] = trimmed.split("?");
 
   if (path === "/home") return { page: "home" };
   if (path.startsWith("/cdm/")) {
@@ -31,9 +28,6 @@ const parseHash = (hash: string): Route => {
   if (path.startsWith("/transcript/")) {
     const transcriptId = path.slice("/transcript/".length);
     return { page: "transcript", transcriptId };
-  }
-  if (path === "/chat") {
-    return { page: "chat", initialQuery: params.get("q") ?? undefined };
   }
   return { page: "mississauga" };
 };
@@ -67,8 +61,6 @@ const App = () => {
       return <TopicDetailPage topicId={route.topicId} />;
     case "transcript":
       return <TranscriptPage transcriptId={route.transcriptId} />;
-    case "chat":
-      return <SearchChatPage initialQuery={route.initialQuery} />;
   }
 };
 

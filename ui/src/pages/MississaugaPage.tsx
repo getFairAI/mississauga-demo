@@ -70,7 +70,12 @@ const MississaugaPage = () => {
     const q = query || searchValue.trim();
     if (!q) return;
     setSearchExpanded(false);
-    navigate(`/chat?q=${encodeURIComponent(q)}`);
+    setSearchValue("");
+    if (recent) {
+      navigate(`/cdm/${recent.id}`);
+    } else {
+      navigate("/home");
+    }
   };
 
   const handleEscape = () => {
@@ -105,16 +110,6 @@ const MississaugaPage = () => {
             {item}
           </div>
         ))}
-        <a
-          href="#/chat"
-          className="msga-nav-item msga-nav-item-cm"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/chat");
-          }}
-        >
-          Civic Memory
-        </a>
       </nav>
 
       {/* Search overlay — expanded state */}
@@ -365,27 +360,6 @@ const MississaugaPage = () => {
                   Civic Deliberative Memory
                 </a>
               )}
-
-              {/* CDM search */}
-              <div className="msga-sidebar-search-block">
-                <div className="msga-sidebar-search-label">
-                  Search council records
-                </div>
-                <input
-                  className="msga-sidebar-search-input"
-                  type="text"
-                  placeholder="Ask any question…"
-                  value={searchValue}
-                  onChange={(e) => setSearchValue(e.target.value)}
-                  onFocus={() => setSearchExpanded(true)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleSearch();
-                    }
-                  }}
-                />
-              </div>
             </div>
           </aside>
         </div>

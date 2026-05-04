@@ -208,7 +208,7 @@ const LouieWorkspace = ({
     if (onAsk) {
       onAsk(text);
     } else {
-      window.location.hash = "/chat";
+      window.location.hash = "/home";
     }
   };
 

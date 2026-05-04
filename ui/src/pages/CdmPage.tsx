@@ -319,16 +319,6 @@ const CdmPage = ({ meetingId }: { meetingId: string }) => {
             {item}
           </div>
         ))}
-        <a
-          href="#/chat"
-          className="msga-nav-item msga-nav-item-cm"
-          onClick={(e) => {
-            e.preventDefault();
-            navigate("/chat");
-          }}
-        >
-          Civic Memory
-        </a>
       </nav>
       <header className="cdm-header">
         <div className="cdm-header-left">

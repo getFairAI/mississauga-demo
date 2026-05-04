@@ -34,7 +34,7 @@ const HomePage = () => {
     const q = query || searchValue.trim();
     if (!q) return;
     setSearchExpanded(false);
-    navigate(`/chat?q=${encodeURIComponent(q)}`);
+    setSearchValue("");
   };
 
   const handleEscape = () => {
