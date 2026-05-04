@@ -12,8 +12,12 @@ import {
   type SummaryResponse,
   type SummaryVersion,
   type ArgumentMapVersion,
+  type AssistantHistoryMessage,
 } from "../api";
 import { transcriptToFeedItem, type FeedItem } from "../feedTypes";
+import { loadChatHistory, saveChatHistory } from "../utils/chatHistoryStore";
+
+const topicChatScope = (topicId: string) => `topic:${topicId}`;
 
 const renderChatMarkdown = (text: string) => {
   const lines = text.split("\n");
@@ -121,12 +125,20 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
   const [summaryProgress, setSummaryProgress] = useState<{ chunk: number; total: number } | null>(null);
   const mapSocketRef = useRef<WebSocket | null>(null);
   const summarySocketRef = useRef<WebSocket | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() =>
+    loadChatHistory<ChatMessage>(topicChatScope(topicId)),
+  );
+  const [chatRestored, setChatRestored] = useState(
+    () => loadChatHistory<ChatMessage>(topicChatScope(topicId)).length > 0,
+  );
   const [chatInput, setChatInput] = useState("");
   const [chatThinking, setChatThinking] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const restored = loadChatHistory<ChatMessage>(topicChatScope(topicId));
+    setChatMessages(restored);
+    setChatRestored(restored.length > 0);
     setItem(undefined);
     setMapVersions(undefined);
     setSummaryVersions(undefined);
@@ -159,19 +171,25 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
       .catch(() => setSummaryVersions([]));
   }, [item]);
 
-  // Build initial chat message once both map and summary have resolved
+  // Build initial chat message once both map and summary have resolved.
+  // Skip when restoring from a recent local history.
   useEffect(() => {
     if (!item || mapVersions === undefined || summaryVersions === undefined) return;
-    const latestMap = mapVersions.length > 0 ? mapVersions[mapVersions.length - 1].argument_map : null;
-    const latestSummary = summaryVersions.length > 0 ? { summary: summaryVersions[summaryVersions.length - 1].summary } as SummaryResponse : null;
     window.scrollTo(0, 0);
     document.querySelector(".topic-main")?.scrollTo(0, 0);
+    if (chatRestored) return;
+    const latestMap = mapVersions.length > 0 ? mapVersions[mapVersions.length - 1].argument_map : null;
+    const latestSummary = summaryVersions.length > 0 ? { summary: summaryVersions[summaryVersions.length - 1].summary } as SummaryResponse : null;
     setChatMessages([{
       id: "summary",
       role: "assistant",
       text: buildInitialSummary(item, latestMap, latestSummary),
     }]);
-  }, [item, mapVersions, summaryVersions]);
+  }, [item, mapVersions, summaryVersions, chatRestored]);
+
+  useEffect(() => {
+    saveChatHistory(topicChatScope(topicId), chatMessages);
+  }, [topicId, chatMessages]);
 
   useEffect(() => {
     const el = messagesEndRef.current?.closest(".chat-messages");
@@ -278,9 +296,13 @@ const TopicDetailPage = ({ topicId }: { topicId: string }) => {
     const text = chatInput.trim();
     if (!text || chatThinking) return;
     setChatInput("");
+    const history: AssistantHistoryMessage[] = chatMessages.map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
     setChatMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: "user", text }]);
     setChatThinking(true);
-    askAssistant(text)
+    askAssistant(text, history)
       .then((r) => {
         setChatMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: r.answer ?? "No response received." }]);
         setChatThinking(false);

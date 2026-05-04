@@ -160,7 +160,11 @@ export type AssistantResponse = {
   answer?: string;
   chart?: AssistantChart;
   sources?: AssistantSource[];
-  session_id?: string;
+};
+
+export type AssistantHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 export async function sendOpenAI(file: File, roomId?: string, diarize = false) {
@@ -416,16 +420,15 @@ export async function streamTranscriptPages(
 
 export async function askAssistant(
   question: string,
-  sessionId?: string,
+  history?: AssistantHistoryMessage[],
 ): Promise<AssistantResponse> {
   recordCall("askAssistant");
-  // Single-flight key includes session so identical follow-ups in different
-  // sessions don't share a response.
-  const key = `askAssistant:${sessionId ?? "anon"}:${question}`;
+  const historyJson = history && history.length > 0 ? JSON.stringify(history) : "";
+  const key = `askAssistant:${historyJson}:${question}`;
   return singleFlight(key, async () => {
     const form = new FormData();
     form.append("question", question);
-    if (sessionId) form.append("session_id", sessionId);
+    if (historyJson) form.append("history", historyJson);
 
     const res = await fetch(`${API_BASE}/assistant`, {
       method: "POST",
@@ -438,67 +441,4 @@ export async function askAssistant(
 
     return res.json() as Promise<AssistantResponse>;
   });
-}
-
-/** Best-effort: tell the server to forget a session immediately. */
-export async function forgetChatSession(sessionId: string): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/chat-sessions/${encodeURIComponent(sessionId)}/forget`, {
-      method: "POST",
-    });
-  } catch {
-    // Silent failure is fine.
-  }
-}
-
-export type ChatSessionSummary = {
-  id: string;
-  title: string | null;
-  created_at: number;
-  last_seen: number;
-  message_count: number;
-};
-
-export type ChatSessionMessage = {
-  role: "user" | "assistant";
-  content: string;
-  created_at: number;
-};
-
-export type ChatSessionFull = {
-  id: string;
-  title: string | null;
-  created_at: number;
-  last_seen: number;
-  messages: ChatSessionMessage[];
-};
-
-export async function createChatSession(
-  title?: string,
-): Promise<ChatSessionSummary> {
-  const res = await fetch(`${API_BASE}/chat-sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(title ? { title } : {}),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<ChatSessionSummary>;
-}
-
-export async function listChatSessions(): Promise<ChatSessionSummary[]> {
-  const res = await fetch(`${API_BASE}/chat-sessions`);
-  if (!res.ok) throw new Error(await res.text());
-  const data = (await res.json()) as { items: ChatSessionSummary[] };
-  return data.items ?? [];
-}
-
-export async function loadChatSession(
-  sessionId: string,
-): Promise<ChatSessionFull | null> {
-  const res = await fetch(
-    `${API_BASE}/chat-sessions/${encodeURIComponent(sessionId)}`,
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<ChatSessionFull>;
 }

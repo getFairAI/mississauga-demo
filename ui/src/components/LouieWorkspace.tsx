@@ -29,6 +29,7 @@ import { useArgumentMap } from "../hooks/useArgumentMap";
 import { useAudioSnippets } from "../hooks/useAudioSnippets";
 import { motion, AnimatePresence } from "motion/react";
 import { askAssistant, type AssistantResponse } from "../api";
+import ChatMarkdown from "./ChatMarkdown";
 import AudioPlayer from "./AudioPlayer";
 
 const brandBlue = "#0072BC";
@@ -618,7 +619,11 @@ const LouieWorkspace = ({
                     boxShadow: msg.role === "user" ? "0 6px 14px rgba(0,114,188,0.25)" : "none",
                   }}
                 >
-                  {msg.text}
+                  {msg.role === "assistant" ? (
+                    <ChatMarkdown text={msg.text} className="chat-markdown-louie" />
+                  ) : (
+                    msg.text
+                  )}
                 </Box>
               ))}
               {(chatLoading) && (

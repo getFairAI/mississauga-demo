@@ -1,52 +1,12 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from "react";
 import type { Meeting } from "../adapters/meetingAdapter";
-import { askAssistant, type AssistantResponse } from "../api";
-import { navigate } from "../App";
-
-const renderInline = (text: string) => {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, j) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={j}>{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
-};
-
-const renderChatMarkdown = (text: string) => {
-  const lines = text.split("\n");
-  const elements: React.JSX.Element[] = [];
-  let key = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line.startsWith("### ")) {
-      elements.push(<h3 key={key++}>{renderInline(line.slice(4))}</h3>);
-    } else if (line.startsWith("## ")) {
-      elements.push(<h3 key={key++}>{renderInline(line.slice(3))}</h3>);
-    } else if (line.startsWith("> *")) {
-      const content = line.slice(3, line.endsWith("*") ? -1 : undefined);
-      elements.push(<blockquote key={key++}>{content}</blockquote>);
-    } else if (line.startsWith("> ")) {
-      elements.push(
-        <blockquote key={key++}>{renderInline(line.slice(2))}</blockquote>,
-      );
-    } else if (line.startsWith("---")) {
-      elements.push(<hr key={key++} />);
-    } else if (line.startsWith("- ")) {
-      elements.push(<li key={key++}>{renderInline(line.slice(2))}</li>);
-    } else if (line.trim() === "") {
-      // skip
-    } else {
-      elements.push(<p key={key++}>{renderInline(line)}</p>);
-    }
-  }
-
-  return elements;
-};
+import { askAssistant, type AssistantResponse, type AssistantHistoryMessage } from "../api";
+import { loadChatHistory, saveChatHistory } from "../utils/chatHistoryStore";
+import ChatMarkdown from "./ChatMarkdown";
 
 type ChatSource = { reportId?: string; title?: string };
+
+type BoardLink = { qid: string; label: string };
 
 type ChatMessage = {
   id: string;
@@ -55,6 +15,7 @@ type ChatMessage = {
   streaming?: boolean;
   error?: boolean;
   sources?: ChatSource[];
+  boardLink?: BoardLink;
 };
 
 type Props = {
@@ -117,7 +78,7 @@ const TypewriterMessage = ({
   if (done) {
     return (
       <div ref={containerRef} className="chat-msg assistant">
-        {renderChatMarkdown(text)}
+        <ChatMarkdown text={text} />
       </div>
     );
   }
@@ -125,7 +86,7 @@ const TypewriterMessage = ({
   const partial = text.slice(0, displayedLength);
   return (
     <div ref={containerRef} className="chat-msg assistant fc-streaming">
-      {renderChatMarkdown(partial)}
+      <ChatMarkdown text={partial} />
       <span className="fc-cursor" />
     </div>
   );
@@ -149,23 +110,52 @@ const responseToMarkdown = (resp: AssistantResponse): string => {
 
 const VISIBLE_WELCOME_CHIPS = 4;
 
+const historyScope = (meetingId: string) => `fc:${meetingId}`;
+
 const FloatingChat = ({ meeting }: Props) => {
   const [expanded, setExpanded] = useState(true);
   const [closing, setClosing] = useState(false);
   const [draftInput, setDraftInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    loadChatHistory<ChatMessage>(historyScope(meeting.id)).map((m) => ({
+      ...m,
+      streaming: false,
+    })),
+  );
   const [thinking, setThinking] = useState(false);
   const [, setStreamingId] = useState<string | null>(null);
   const [hasOpened, setHasOpened] = useState(false);
-  const [hasBeenWelcomed, setHasBeenWelcomed] = useState(false);
+  const [hasBeenWelcomed, setHasBeenWelcomed] = useState(
+    () =>
+      loadChatHistory<ChatMessage>(historyScope(meeting.id)).length > 0,
+  );
   const [showAllChips, setShowAllChips] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setMessages([]);
+    const restored = loadChatHistory<ChatMessage>(historyScope(meeting.id)).map(
+      (m) => ({ ...m, streaming: false }),
+    );
+    setMessages(restored);
+    setHasBeenWelcomed(restored.length > 0);
     setShowAllChips(false);
   }, [meeting.id]);
+
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+    const persistable = messages
+      .filter((m) => !m.error)
+      .map(({ id, role, text, sources, boardLink }) => ({
+        id,
+        role,
+        text,
+        sources,
+        boardLink,
+      }));
+    saveChatHistory(historyScope(meeting.id), persistable);
+  }, [meeting.id, messages]);
 
   useEffect(() => {
     const container = messagesEndRef.current?.closest(".fc-messages");
@@ -203,10 +193,13 @@ const FloatingChat = ({ meeting }: Props) => {
   };
 
   const handleSend = useCallback(
-    async (questionText?: string) => {
+    async (questionText?: string, boardLink?: BoardLink) => {
       const text = (questionText ?? draftInput).trim();
       if (!text || thinking) return;
       setDraftInput("");
+      const history: AssistantHistoryMessage[] = messagesRef.current
+        .filter((m) => !m.error)
+        .map((m) => ({ role: m.role, content: m.text }));
       setMessages((prev) => [
         ...prev,
         { id: `u-${Date.now()}`, role: "user", text },
@@ -214,7 +207,7 @@ const FloatingChat = ({ meeting }: Props) => {
       setThinking(true);
 
       try {
-        const response = await askAssistant(text);
+        const response = await askAssistant(text, history);
         const markdown = responseToMarkdown(response);
         const msgId = `a-${Date.now()}`;
         setThinking(false);
@@ -226,6 +219,7 @@ const FloatingChat = ({ meeting }: Props) => {
             text: markdown,
             streaming: true,
             sources: response.sources,
+            boardLink,
           },
         ]);
         setStreamingId(msgId);
@@ -247,10 +241,11 @@ const FloatingChat = ({ meeting }: Props) => {
     [draftInput, thinking],
   );
 
-  const goToChat = () => {
+  const handleSendFromWelcome = () => {
     const q = draftInput.trim();
     if (!q) return;
-    navigate(`/chat?q=${encodeURIComponent(q)}`);
+    setHasBeenWelcomed(true);
+    void handleSend();
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -263,7 +258,7 @@ const FloatingChat = ({ meeting }: Props) => {
   const handleWelcomeKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      goToChat();
+      handleSendFromWelcome();
     }
   };
 
@@ -272,17 +267,23 @@ const FloatingChat = ({ meeting }: Props) => {
     if (!hasOpened) setHasOpened(true);
   };
 
+  const scrollToBoard = (qid: string) => {
+    const section = document.getElementById(`ng-${qid}`);
+    if (!section) return;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+    section.classList.add("cdm-section-highlight");
+    setTimeout(() => section.classList.remove("cdm-section-highlight"), 1800);
+  };
+
   const handleSuggestedQuestion = (question: string, qid: string) => {
+    if (!hasBeenWelcomed) setHasBeenWelcomed(true);
+    setShowAllChips(false);
+    void handleSend(question, { qid, label: question });
+  };
+
+  const handleViewBoard = (qid: string) => {
     handleClose();
-    setTimeout(() => {
-      const section = document.getElementById(`ng-${qid}`);
-      if (section) {
-        section.scrollIntoView({ behavior: "smooth", block: "start" });
-        section.classList.add("cdm-section-highlight");
-        setTimeout(() => section.classList.remove("cdm-section-highlight"), 1800);
-      }
-    }, 300);
-    void handleSend(question);
+    setTimeout(() => scrollToBoard(qid), 300);
   };
 
   const allSuggestedQuestions = meeting.questions
@@ -332,7 +333,7 @@ const FloatingChat = ({ meeting }: Props) => {
 
       {expanded && (
         <div
-          className={`fc-overlay ${closing ? "fc-closing" : ""} ${messages.length === 0 ? "fc-overlay-welcome" : ""}`}
+          className={`fc-overlay ${closing ? "fc-closing" : ""} ${messages.length === 0 && !hasBeenWelcomed ? "fc-overlay-welcome" : ""}`}
           onMouseDown={handleOverlayClick}
         >
           {messages.length === 0 && !hasBeenWelcomed && (
@@ -351,7 +352,7 @@ const FloatingChat = ({ meeting }: Props) => {
                 />
                 <button
                   className="fc-send-btn"
-                  onClick={goToChat}
+                  onClick={handleSendFromWelcome}
                   disabled={!draftInput.trim()}
                 >
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -424,9 +425,11 @@ const FloatingChat = ({ meeting }: Props) => {
                       <div
                         className={`chat-msg ${msg.role}${msg.error ? " fc-error" : ""}`}
                       >
-                        {msg.role === "assistant"
-                          ? renderChatMarkdown(msg.text)
-                          : msg.text}
+                        {msg.role === "assistant" ? (
+                          <ChatMarkdown text={msg.text} />
+                        ) : (
+                          msg.text
+                        )}
                       </div>
                     )}
                     {msg.role === "assistant" &&
@@ -440,6 +443,31 @@ const FloatingChat = ({ meeting }: Props) => {
                             </span>
                           ))}
                         </div>
+                      )}
+                    {msg.role === "assistant" &&
+                      !msg.streaming &&
+                      msg.boardLink && (
+                        <button
+                          className="fc-board-link"
+                          onClick={() => handleViewBoard(msg.boardLink!.qid)}
+                        >
+                          View deliberation board
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 12 12"
+                            fill="none"
+                            aria-hidden
+                          >
+                            <path
+                              d="M4 2.5L7.5 6L4 9.5"
+                              stroke="currentColor"
+                              strokeWidth="1.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
                       )}
                   </div>
                 ))}

@@ -1104,46 +1104,6 @@ async def admin_reset_openai_guard(request: Request) -> dict:
     return reset_breaker()
 
 
-@app.get("/admin/chat-sessions")
-async def admin_chat_sessions(request: Request) -> dict:
-    _check_guard_admin(request)
-    from chat_sessions import stats
-    return stats()
-
-
-@app.post("/chat-sessions/{session_id}/forget")
-async def forget_chat_session(session_id: str) -> dict:
-    """Drop a single chat session. Open by design — sessions are non-sensitive."""
-    from chat_sessions import drop
-    return {"forgot": drop(session_id)}
-
-
-@app.get("/chat-sessions")
-async def list_chat_sessions() -> dict:
-    """List all persisted chat sessions, most-recent first."""
-    from chat_sessions import list_sessions
-    return {"items": list_sessions()}
-
-
-@app.post("/chat-sessions")
-async def create_chat_session(payload: dict | None = Body(default=None)) -> dict:
-    """Mint a new empty session. Optional ``title`` derives the readable label;
-    when omitted, it'll be set from the first user message."""
-    from chat_sessions import create
-    title = (payload or {}).get("title") if isinstance(payload, dict) else None
-    return create(title if isinstance(title, str) and title.strip() else None)
-
-
-@app.get("/chat-sessions/{session_id}")
-async def get_chat_session(session_id: str) -> dict:
-    """Return the full message history for a session."""
-    from chat_sessions import load_full
-    payload = load_full(session_id)
-    if payload is None:
-        raise HTTPException(status_code=404, detail="Session not found.")
-    return payload
-
-
 @app.get("/rooms", response_model=RoomsResponse)
 async def list_rooms() -> RoomsResponse:
     rooms = await manager.list_rooms()
@@ -1675,7 +1635,7 @@ async def websocket_endpoint_with_prefix(websocket: WebSocket, room_id: str) -> 
 async def assistant(
     request: Request,
     question: Optional[str] = Form(None),
-    session_id: Optional[str] = Form(None),
+    history: Optional[str] = Form(None),
 ):
     try:
         if not question or not str(question).strip():
@@ -1683,11 +1643,25 @@ async def assistant(
 
         question = question.strip()
 
-        # ── Session history ──────────────────────────────────────────────
-        # If session_id is provided, prepend prior turns to the LLM context
-        # so follow-ups have continuity. New session ids are minted on demand.
-        from chat_sessions import get_or_create, append_turn
-        active_session_id, prior_messages = get_or_create(session_id)
+        # ── Conversation history ─────────────────────────────────────────
+        # The client sends prior turns as a JSON array of {role, content} so
+        # follow-ups have continuity. Nothing is persisted server-side.
+        prior_messages: list[dict] = []
+        if history:
+            try:
+                parsed = json.loads(history)
+                if isinstance(parsed, list):
+                    for m in parsed[-40:]:  # bound LLM context length
+                        if (
+                            isinstance(m, dict)
+                            and m.get("role") in ("user", "assistant")
+                            and isinstance(m.get("content"), str)
+                        ):
+                            prior_messages.append(
+                                {"role": m["role"], "content": m["content"]}
+                            )
+            except Exception:
+                prior_messages = []
 
         # ── Retrieve relevant chunks from RAG ────────────────────────────
         from rag import get_rag
@@ -1812,20 +1786,6 @@ async def assistant(
                 clean_sources.append(s)
 
         payload["sources"] = clean_sources
-
-        # Persist the turn for follow-ups. We store the question (not the
-        # context-stuffed user_msg) so prior turns stay short. The assistant
-        # entry stores the textual answer; chart payloads are kept in the
-        # response but not added to the LLM context.
-        assistant_text = payload.get("answer") or ""
-        if not assistant_text and payload.get("type") == "chart":
-            assistant_text = "[chart returned]"
-        append_turn(
-            active_session_id,
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": assistant_text},
-        )
-        payload["session_id"] = active_session_id
         return payload
 
     except HTTPException:
