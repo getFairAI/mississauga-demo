@@ -25,6 +25,7 @@ import { useTranscriptions } from "../hooks/useTranscriptions";
 import { useTranscriptionData } from "../hooks/useTranscriptionData";
 import { useArgumentMap } from "../hooks/useArgumentMap";
 import { useAudioSnippets } from "../hooks/useAudioSnippets";
+import AudioPlayer from "./AudioPlayer";
 
 const KnowledgeWorkspace = () => {
   const { data: transcripts, loading: loadingTranscripts, error: transcriptsError } =
@@ -448,7 +449,7 @@ const KnowledgeWorkspace = () => {
                                           width={'100%'}
                                           onClick={(e) => e.stopPropagation()}
                                         >
-                                          <audio controls src={audioUrls[evKey]} style={{ width: "100%" }} />
+                                          <AudioPlayer src={audioUrls[evKey]} />
                                         </Box>
                                       )}
                                       {audioError[evKey] && (

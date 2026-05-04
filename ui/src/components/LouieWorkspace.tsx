@@ -29,6 +29,7 @@ import { useArgumentMap } from "../hooks/useArgumentMap";
 import { useAudioSnippets } from "../hooks/useAudioSnippets";
 import { motion, AnimatePresence } from "motion/react";
 import { askAssistant, type AssistantResponse } from "../api";
+import AudioPlayer from "./AudioPlayer";
 
 const brandBlue = "#0072BC";
 
@@ -473,13 +474,13 @@ const LouieWorkspace = ({
                               </Stack>
                             ) : audioUrls[`${key}-question`] ? (
                               <>
-                                <audio
-                                  controls
-                                  autoPlay
-                                  src={audioUrls[`${key}-question`]}
-                                  style={{ flex: 1 }}
-                                  onEnded={() => dismiss(`${key}-question`)}
-                                />
+                                <Box sx={{ flex: 1 }}>
+                                  <AudioPlayer
+                                    src={audioUrls[`${key}-question`]}
+                                    autoPlay
+                                    onEnded={() => dismiss(`${key}-question`)}
+                                  />
+                                </Box>
                                 <Button
                                   size="small"
                                   variant="outlined"
@@ -1338,13 +1339,13 @@ const LouieWorkspace = ({
                               gap: 1,
                             }}
                           >
-                            <audio
-                              controls
-                              autoPlay
-                              src={audioUrls[`${key}-question`]}
-                              style={{ flex: 1 }}
-                              onEnded={() => dismiss(`${key}-question`)}
-                            />
+                            <Box sx={{ flex: 1 }}>
+                              <AudioPlayer
+                                src={audioUrls[`${key}-question`]}
+                                autoPlay
+                                onEnded={() => dismiss(`${key}-question`)}
+                              />
+                            </Box>
                             <Button
                               size="small"
                               variant="outlined"
@@ -1420,13 +1421,13 @@ const LouieWorkspace = ({
                                             gap: 1,
                                           }}
                                         >
-                                          <audio
-                                            controls
-                                            autoPlay
-                                            src={audioUrls[evKey]}
-                                            style={{ flex: 1 }}
-                                            onEnded={() => dismiss(evKey)}
-                                          />
+                                          <Box sx={{ flex: 1 }}>
+                                            <AudioPlayer
+                                              src={audioUrls[evKey]}
+                                              autoPlay
+                                              onEnded={() => dismiss(evKey)}
+                                            />
+                                          </Box>
                                           <Button
                                             size="small"
                                             variant="outlined"

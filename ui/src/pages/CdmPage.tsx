@@ -10,6 +10,7 @@ import {
   type MeetingQuestion,
 } from "../adapters/meetingAdapter";
 import FloatingChat from "../components/FloatingChat";
+import StyledAudio from "../components/AudioPlayer";
 
 const fmt = (s: number) => {
   const h = Math.floor(s / 3600);
@@ -91,7 +92,7 @@ const AudioPlayer = ({
           ) : loading ? (
             <div className="cdm-audio-loading">Loading audio…</div>
           ) : url ? (
-            <audio controls src={url} style={{ width: "100%" }} />
+            <StyledAudio src={url} />
           ) : (
             <div className="cdm-audio-loading">Preparing snippet…</div>
           )}
