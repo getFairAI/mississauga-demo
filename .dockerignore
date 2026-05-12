@@ -1,0 +1,35 @@
+.git
+.gitignore
+.venv*
+__pycache__
+**/__pycache__
+*.pyc
+
+# Heavy / runtime-only — provided via bind-mount volumes instead
+data
+transcriptions
+chunks
+parts
+.browser_profile
+
+# Media not needed in the image
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.m4a
+
+# Front-end (not bundled into backend image)
+ui/node_modules
+ui/dist
+
+# Local secrets — provided via env_file at runtime
+.env
+
+# Editor / OS junk
+.DS_Store
+.idea
+.vscode
+
+# Reference HTML prototypes
+louie-*.html
